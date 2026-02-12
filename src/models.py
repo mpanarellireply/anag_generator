@@ -16,7 +16,7 @@ class Variable(BaseModel):
 
 class Control(BaseModel):
     """A validation control/check within the function."""
-    code: str = Field(description="Control code, e.g. NCD01249")
+    code: str = Field(default="", description="Control code, e.g. NCD01249")
     description: str = Field(description="Natural-language description of the control")
     short_desc: str = Field(default="", description="Short description for NTC_DM_CTRL INSERT")
     error_code: str = Field(default="", description="Error code, e.g. NED01249")

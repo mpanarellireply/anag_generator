@@ -1,4 +1,5 @@
 import json
+import traceback
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -11,7 +12,7 @@ specification for a PL/SQL validation function.
 
 The function follows this pattern:
 - It receives input parameters and validates them
-- Each validation is identified by a control code (e.g., NCD01249)
+- Each validation control has a code (NCD...) and error code (NED...) that will be assigned separately
 - The function returns a list of error codes separated by semicolons, or 'OK' if all checks pass
 
 Given the raw data, you must:
@@ -27,15 +28,18 @@ Given the raw data, you must:
    - Names starting with V_N or V_COUNT -> NUMBER
    - Default -> CHAR
 3. All parameters are IN direction unless otherwise specified
-4. Identify unique controls from the rows (deduplicate by CODICE CONTROLLO)
-5. For each control, extract: code, description, short_desc, error_code, long_desc
-6. Set logic to a TODO placeholder with the control description
-7. Identify any additional variables that might be needed (leave empty if unclear)
+4. For each control row, generate:
+   - "description": a concise description of what the control validates (based on the CONTROLLO column context)
+   - "short_desc": a short label (max ~50 chars) for the NTC_DM_CTRL INSERT
+   - "long_desc": a longer description for the NTC_DM_CTRL INSERT error message
+5. Set logic to a TODO placeholder with the control description
+6. Identify any additional variables that might be needed (leave empty if unclear)
+7. The function_description should summarize what the function validates
 
 IMPORTANT:
-- Skip rows where CODICE CONTROLLO is empty
+- Do NOT generate control codes (code) or error codes (error_code) — those will be assigned automatically
+- Each row in the control rows represents one distinct control — do NOT deduplicate or skip any
 - Clean up descriptions by removing trailing quotes and whitespace
-- The function_description should summarize what the function validates
 
 Respond ONLY with a valid JSON object matching this schema:
 {{
@@ -46,10 +50,8 @@ Respond ONLY with a valid JSON object matching this schema:
     ],
     "controls": [
         {{
-            "code": "string",
             "description": "string",
             "short_desc": "string",
-            "error_code": "string",
             "long_desc": "string",
             "logic": "string"
         }}
@@ -67,12 +69,13 @@ Operatività: {operativita}
 Funzione (category): {funzione}
 Parametri Input: {parametri_input}
 
-Control Rows:
+Control Rows (each row is one control):
 {control_rows_json}
 
 Remember:
-- Deduplicate controls by CODICE CONTROLLO
-- Skip rows with empty CODICE CONTROLLO
+- Do NOT include "code" or "error_code" fields — they are assigned automatically
+- Each row is a distinct control — include all of them, do not deduplicate or skip
+- Generate "description", "short_desc", and "long_desc" based on the CONTROLLO column context
 - Set logic to: "-- TODO: <description>\\n    NULL; -- IMPLEMENT VALIDATION LOGIC"
 - Clean up description strings (remove trailing quotes, commas, whitespace)
 - Prefix all parameter names with V_ if not already prefixed
@@ -90,16 +93,21 @@ class ParserAgent:
         ])
         self.chain = self.prompt | self.llm
 
-    def parse(self, raw_data: RawFunctionData) -> FunctionSpec:
+    @staticmethod
+    def _assign_codes(spec: FunctionSpec, start_code: int) -> FunctionSpec:
+        """Assign sequential NCD/NED codes to controls starting from start_code."""
+        for i, control in enumerate(spec.controls):
+            code_num = start_code + i
+            control.code = f"NCD0{code_num:05d}"
+            control.error_code = f"NED0{code_num:05d}"
+        return spec
+
+    def parse(self, raw_data: RawFunctionData, start_code: int) -> FunctionSpec:
         """Parse raw function data into a structured FunctionSpec."""
         control_rows = []
         for row in raw_data.rows:
             control_rows.append({
                 "controllo": row.controllo,
-                "codice_controllo": row.codice_controllo,
-                "descrizione_controllo": row.descrizione_controllo,
-                "codice_errore": row.codice_errore,
-                "descrizione_errore": row.descrizione_errore,
                 "bloccante_warning": row.bloccante_warning,
                 "messaggio_errore": row.messaggio_errore,
                 "campo_impattato": row.campo_impattato,
@@ -121,18 +129,31 @@ class ParserAgent:
             content = content.rsplit("```", 1)[0]
 
         data = json.loads(content)
-        return FunctionSpec(**data)
+        spec = FunctionSpec(**data)
 
-    def parse_all(self, raw_data_list: list[RawFunctionData]) -> list[FunctionSpec]:
-        """Parse all raw function data into FunctionSpec objects."""
+        # Assign sequential NCD/NED codes
+        spec = self._assign_codes(spec, start_code)
+
+        return spec
+
+    def parse_all(
+        self,
+        raw_data_list: list[RawFunctionData],
+        start_code: int = 1,
+    ) -> list[FunctionSpec]:
+        """Parse all raw function data into FunctionSpec objects.
+
+        Each function gets its own sequential numbering starting from start_code.
+        """
         specs = []
         for raw_data in raw_data_list:
             try:
-                spec = self.parse(raw_data)
+                spec = self.parse(raw_data, start_code)
                 specs.append(spec)
                 print(f"  [Parser] Parsed: {spec.function_name} "
-                      f"({len(spec.parameters)} params, {len(spec.controls)} controls)")
+                      f"({len(spec.parameters)} params, {len(spec.controls)} controls, "
+                      f"codes NCD0{start_code:05d}-NCD0{start_code + len(spec.controls) - 1:05d})")
             except Exception as e:
                 print(f"  [Parser] ERROR parsing {raw_data.function_name}: {e}")
-                print(e.__traceback__)
+                print(traceback.format_exc())
         return specs

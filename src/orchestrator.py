@@ -68,6 +68,7 @@ class Orchestrator:
         excel_path: str,
         function_name: str | None = None,
         force_parse: bool = False,
+        start_code: int = 1,
     ) -> dict:
         """Run the full pipeline and return a summary report."""
         print("=" * 60)
@@ -104,7 +105,7 @@ class Orchestrator:
             if to_parse:
                 print(f"\n[Step 2] Parsing {len(to_parse)} new functions with LLM "
                       f"({len(already_cached)} already cached)...")
-                new_specs = self.parser_agent.parse_all(to_parse)
+                new_specs = self.parser_agent.parse_all(to_parse, start_code=start_code)
                 print(f"  Successfully parsed {len(new_specs)}/{len(to_parse)} functions")
                 self._merge_into_cache(new_specs)
                 specs = already_cached + new_specs
@@ -113,7 +114,7 @@ class Orchestrator:
                 specs = already_cached
         else:
             print(f"\n[Step 2] Parsing {len(raw_functions)} functions with LLM...")
-            specs = self.parser_agent.parse_all(raw_functions)
+            specs = self.parser_agent.parse_all(raw_functions, start_code=start_code)
             print(f"  Successfully parsed {len(specs)}/{len(raw_functions)} functions")
             self._merge_into_cache(specs)
 

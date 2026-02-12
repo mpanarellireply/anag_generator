@@ -6,10 +6,6 @@ from dataclasses import dataclass, field
 class RawControlRow:
     """Raw data extracted from one Excel row."""
     controllo: str = ""
-    codice_controllo: str = ""
-    descrizione_controllo: str = ""
-    codice_errore: str = ""
-    descrizione_errore: str = ""
     bloccante_warning: str = ""
     messaggio_errore: str = ""
     campo_impattato: str = ""
@@ -26,9 +22,12 @@ class RawFunctionData:
 
 
 def read_excel(file_path: str) -> pd.DataFrame:
-    """Read the Excel file and return a DataFrame."""
-    df = pd.read_excel(file_path)
-    return df
+    """Read the Excel file and return a DataFrame containing all sheets."""
+    # Read all sheets
+    all_sheets = pd.read_excel(file_path, sheet_name=None)    
+    combined_df = pd.concat(all_sheets.values(), ignore_index=True)
+    
+    return combined_df
 
 
 def clean_function_name(name: str) -> str:
@@ -70,10 +69,6 @@ def group_by_function(df: pd.DataFrame) -> list[RawFunctionData]:
         for _, row in group.iterrows():
             control_row = RawControlRow(
                 controllo=_safe_str(row.get("CONTROLLO", "")),
-                codice_controllo=_safe_str(row.get("CODICE CONTROLLO", "")),
-                descrizione_controllo=_safe_str(row.get("DESCRIZIONE CONTROLLO NEW", "")),
-                codice_errore=_safe_str(row.get("CODICE ERRORE", "")),
-                descrizione_errore=_safe_str(row.get("DESCRIZIONE ERRORE NEW", "")),
                 bloccante_warning=_safe_str(row.get("BLOCCANTE/WARNING", "")),
                 messaggio_errore=_safe_str(row.get("MESSAGGIO DI ERRORE", "")),
                 campo_impattato=_safe_str(row.get("CAMPO IMPATTATO", "")),

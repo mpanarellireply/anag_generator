@@ -47,6 +47,12 @@ def main():
         default="parser_cache",
         help="Directory for parsed specs cache (default: parser_cache/)",
     )
+    parser.add_argument(
+        "--start-code",
+        type=int,
+        default=1,
+        help="Starting number for sequential NCD/NED codes per function (default: 1, e.g. 1224 -> NCD01224)",
+    )
 
     args = parser.parse_args()
 
@@ -78,6 +84,7 @@ def main():
         args.excel_path,
         function_name=args.function,
         force_parse=args.force_parse,
+        start_code=args.start_code,
     )
 
     sys.exit(0 if summary["reviews_failed"] == 0 else 1)
