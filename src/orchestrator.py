@@ -171,6 +171,7 @@ class Orchestrator:
                 specs = already_cached + new_specs
             else:
                 print(f"\n[Step 2] All {len(already_cached)} functions loaded from cache")
+                print(f"\n!!!!! IF input xlsx file has changed, please use --force-parse flag !!!!!")
                 specs = already_cached
         else:
             print(f"\n[Step 2] Parsing {len(raw_functions)} functions with LLM...")
@@ -237,7 +238,7 @@ class Orchestrator:
             if not skip_refine:
                 t0 = time.time()
                 review_map = {r.function_name: r for r in reviews}
-                for iteration in range(max_refine+1):
+                for iteration in range(max_refine):
                     failed = [r for r in review_map.values() if r.status == "FAIL"]
                     if not failed:
                         break

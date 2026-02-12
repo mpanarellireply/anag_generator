@@ -76,8 +76,8 @@ def main():
     parser.add_argument(
         "--max-refine",
         type=int,
-        default=3,
-        help="Maximum number of refine iterations (default: 3)",
+        default=1,
+        help="Maximum number of refine iterations (default: 1)",
     )
     parser.add_argument(
         "--debug-dir",
