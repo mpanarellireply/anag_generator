@@ -1,0 +1,78 @@
+CREATE OR REPLACE FUNCTION {{ function_name }}
+({% for param in parameters %}
+{{ param.name }} {{ param.direction }} {{ param.type }}{{ "," if not loop.last }}
+{% endfor %})
+
+-- FUNZIONE PER {{ function_description }}
+-- INPUT:
+{% for param in parameters %}
+-- {{ param.name }}: {{ param.description }}
+{% endfor %}
+
+-- CONTROLLI:
+{% for control in controls %}
+-- {{ control.code }}: {{ control.description }}
+{% endfor %}
+
+-- OUTPUT:
+-- V_ERR_LIST: LISTA DI ERRORI
+
+RETURN VARCHAR2
+
+IS 
+
+-- INIZIALIZZAZIONE VARIABILI
+{% for variable in variables %}
+{{ variable.declaration }}
+{% endfor %}
+
+-- INIZIALIZZAZIONE VARIABILI PER GESTIONE ERRORE
+V_CERR           NTC_DM_CTRL.CERR%TYPE;
+V_XERR           NTC_DM_CTRL.XERR%TYPE;
+V_FLG_ATTIVO     NTC_DM_CTRL.FLG_ATTIVO%TYPE;
+V_CFUNZ          VARCHAR2(255) := $$PLSQL_UNIT;
+V_ERR_LIST       VARCHAR2(500) := NULL;
+
+BEGIN
+
+{% for control in controls %}
+-- {{ control.description }}
+-- CONTROLLO {{ control.code }}
+
+SELECT CERR,
+       XERR,
+       FLG_ATTIVO
+  INTO V_CERR,
+       V_XERR,
+       V_FLG_ATTIVO
+  FROM NTC_DM_CTRL
+ WHERE 1 = 1
+   AND CFUNZ = V_CFUNZ
+   AND CCTRL = '{{ control.code }}';
+
+IF V_FLG_ATTIVO = 'Y'
+THEN
+    {{ control.logic }}
+END IF;
+
+{% endfor %}
+
+IF V_ERR_LIST IS NOT NULL
+THEN
+    RETURN RTRIM(V_ERR_LIST, ';');
+ELSE 
+    RETURN 'OK';
+END IF;
+
+EXCEPTION
+      WHEN OTHERS THEN
+      RETURN V_CERR || ' - ERRORE NON GESTITO';
+
+END {{ function_name }};
+/
+
+DELETE FROM NTC_DM_CTRL WHERE CFUNZ = '{{ function_name }}';
+
+{% for control in controls %}
+INSERT INTO NTC_DM_CTRL VALUES('{{ control.code }}', 'D', '{{ function_name }}', '{{ control.short_desc }}', '{{ control.error_code }}', '{{ control.long_desc }}', 'Y');
+{% endfor %}

@@ -1,0 +1,6 @@
+langchain
+langchain-openai
+openpyxl
+pandas
+jinja2
+python-dotenv

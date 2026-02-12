@@ -1,0 +1,5 @@
+*.env
+*.xlsx
+*.sql
+__pycache__
+output/
