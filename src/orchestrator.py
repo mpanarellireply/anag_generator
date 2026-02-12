@@ -6,6 +6,8 @@ from src.excel_parser import read_excel, group_by_function
 from src.agents.parser_agent import ParserAgent
 from src.agents.generator_agent import GeneratorAgent
 from src.agents.reviewer_agent import ReviewerAgent
+from src.agents.refiner_agent import RefinerAgent
+from src.agents.logic_agent import LogicAgent
 from src.models import FunctionSpec, ReviewResult
 
 
@@ -28,6 +30,7 @@ class Orchestrator:
         self.parser_agent = ParserAgent(self.llm)
         self.generator_agent = GeneratorAgent(template_dir, output_dir)
         self.reviewer_agent = ReviewerAgent(self.llm)
+        self.refiner_agent = RefinerAgent(self.llm)
         self.output_dir = output_dir
         self.cache_dir = cache_dir
         self.cache_path = os.path.join(cache_dir, "parsed_specs.json")
@@ -69,6 +72,7 @@ class Orchestrator:
         function_name: str | None = None,
         force_parse: bool = False,
         start_code: int = 1,
+        example_sql: str | None = None,
     ) -> dict:
         """Run the full pipeline and return a summary report."""
         print("=" * 60)
@@ -123,9 +127,34 @@ class Orchestrator:
         sql_paths = self.generator_agent.generate_all(specs)
         print(f"  Generated {len(sql_paths)} SQL files in {self.output_dir}/")
 
-        # Step 4: Review generated files
-        print("\n[Step 4] Reviewing generated SQL files...")
+        # Step 4: Complete TODO logic
+        print("\n[Step 4] Completing TODO logic with LogicAgent...")
+        logic_agent = LogicAgent(self.llm, example_sql_path=example_sql)
+        logic_agent.complete_all(specs, sql_paths)
+
+        # Step 5: Review generated files
+        print("\n[Step 5] Reviewing generated SQL files...")
         reviews = self.reviewer_agent.review_all(specs, sql_paths)
+
+        # Step 6: Refine loop (max 3 iterations)
+        max_refine = 3
+        review_map = {r.function_name: r for r in reviews}
+        for iteration in range(max_refine):
+            failed = [r for r in review_map.values() if r.status == "FAIL"]
+            if not failed:
+                break
+            print(f"\n[Step 6] Refine iteration {iteration + 1}/{max_refine} "
+                  f"({len(failed)} failed files)...")
+            refined_paths = self.refiner_agent.refine_all(specs, sql_paths, failed)
+            if not refined_paths:
+                print("  No files were refined, stopping.")
+                break
+            print(f"\n  Re-reviewing {len(refined_paths)} refined files...")
+            re_reviews = self.reviewer_agent.review_all(specs, refined_paths)
+            for r in re_reviews:
+                review_map[r.function_name] = r
+
+        reviews = list(review_map.values())
 
         # Build summary
         summary = self._build_summary(specs, sql_paths, reviews)

@@ -53,6 +53,11 @@ def main():
         default=1,
         help="Starting number for sequential NCD/NED codes per function (default: 1, e.g. 1224 -> NCD01224)",
     )
+    parser.add_argument(
+        "--example-sql",
+        default=None,
+        help="Path to an example SQL file to use as style reference for the LogicAgent (optional)",
+    )
 
     args = parser.parse_args()
 
@@ -85,6 +90,7 @@ def main():
         function_name=args.function,
         force_parse=args.force_parse,
         start_code=args.start_code,
+        example_sql=args.example_sql,
     )
 
     sys.exit(0 if summary["reviews_failed"] == 0 else 1)

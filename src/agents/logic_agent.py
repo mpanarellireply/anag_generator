@@ -1,0 +1,126 @@
+import json
+import os
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+
+from src.models import FunctionSpec
+
+LOGIC_SYSTEM_PROMPT = """You are an expert PL/SQL developer specializing in Oracle validation functions.
+Your job is to replace TODO placeholders in generated SQL validation functions with actual PL/SQL logic.
+
+Each TODO block sits inside an IF V_FLG_ATTIVO = 'Y' THEN ... END IF; block for a specific control.
+You must infer the validation logic from:
+- The control description (what the check validates)
+- The function parameters (what input data is available)
+- The error pattern: when a check fails, append to the error list with:
+  V_ERR_LIST := V_ERR_LIST || V_CERR || ' - ' || V_XERR || ';';
+
+Common validation patterns:
+- Flag checks: IF TRIM(V_FLAG) IS NOT NULL AND TRIM(V_FLAG) NOT IN ('S','N') THEN append error
+- Required field: IF TRIM(V_FIELD) IS NULL THEN append error
+- Numeric range: IF V_NUM < 0 OR V_NUM > 100 THEN append error
+- Date checks: IF V_DATE IS NOT NULL AND V_DATE > TO_NUMBER(TO_CHAR(SYSDATE,'YYYYMMDD')) THEN append error
+- Cross-field: IF V_A = 'S' AND TRIM(V_B) IS NULL THEN append error
+
+IMPORTANT:
+- Replace ONLY the TODO placeholder lines with actual logic
+- Keep everything else in the SQL file unchanged (structure, comments, variable declarations, etc.)
+- Each validation should be a simple IF ... THEN ... END IF; block
+- The error append pattern is ALWAYS: V_ERR_LIST := V_ERR_LIST || V_CERR || ' - ' || V_XERR || ';';
+- Do NOT wrap the output in markdown code blocks
+- Respond ONLY with the complete corrected SQL file
+{example_section}"""
+
+LOGIC_USER_PROMPT = """Replace all TODO placeholders in this SQL file with actual validation logic.
+
+## Function Specification
+Function: {function_name}
+Description: {function_description}
+Parameters: {parameters_json}
+Controls: {controls_json}
+
+## Current SQL (with TODOs to replace)
+{sql_content}
+"""
+
+
+class LogicAgent:
+    """Agent that replaces TODO placeholders in generated SQL with actual PL/SQL validation logic."""
+
+    def __init__(self, llm: ChatOpenAI, example_sql_path: str | None = None):
+        self.llm = llm
+        self.example_sql = None
+        if example_sql_path and os.path.exists(example_sql_path):
+            with open(example_sql_path, "r", encoding="utf-8") as f:
+                self.example_sql = f.read()
+
+    def _build_chain(self):
+        example_section = ""
+        if self.example_sql:
+            example_section = (
+                "\n\nHere is a reference example of a completed validation function. "
+                "Use it as a style guide for the logic you generate:\n\n"
+                f"```sql\n{self.example_sql}\n```"
+            )
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", LOGIC_SYSTEM_PROMPT.format(example_section=example_section)),
+            ("human", LOGIC_USER_PROMPT),
+        ])
+        return prompt | self.llm
+
+    def complete(self, spec: FunctionSpec, sql_path: str) -> str:
+        """Replace TODO placeholders in a SQL file with actual logic. Returns the path."""
+        with open(sql_path, "r", encoding="utf-8") as f:
+            sql_content = f.read()
+
+        # Skip if no TODOs remain
+        if "TODO" not in sql_content:
+            return sql_path
+
+        params_json = json.dumps(
+            [p.model_dump() for p in spec.parameters], indent=2, ensure_ascii=False
+        )
+        controls_json = json.dumps(
+            [{"code": c.code, "description": c.description, "error_code": c.error_code}
+             for c in spec.controls],
+            indent=2, ensure_ascii=False,
+        )
+
+        chain = self._build_chain()
+        response = chain.invoke({
+            "function_name": spec.function_name,
+            "function_description": spec.function_description,
+            "parameters_json": params_json,
+            "controls_json": controls_json,
+            "sql_content": sql_content,
+        })
+
+        completed = response.content.strip()
+        # Strip markdown code blocks if the LLM wraps them
+        if completed.startswith("```"):
+            completed = completed.split("\n", 1)[1]
+            completed = completed.rsplit("```", 1)[0]
+
+        with open(sql_path, "w", encoding="utf-8") as f:
+            f.write(completed)
+
+        return sql_path
+
+    def complete_all(self, specs: list[FunctionSpec], sql_paths: list[str]) -> list[str]:
+        """Complete TODO logic in all generated SQL files."""
+        spec_map = {s.function_name: s for s in specs}
+        completed_paths = []
+
+        for path in sql_paths:
+            fname = os.path.splitext(os.path.basename(path))[0]
+            if fname not in spec_map:
+                continue
+            try:
+                self.complete(spec_map[fname], path)
+                completed_paths.append(path)
+                print(f"  [Logic] Completed: {fname}")
+            except Exception as e:
+                print(f"  [Logic] ERROR completing {fname}: {e}")
+
+        return completed_paths
