@@ -73,6 +73,5 @@ END {{ function_name }};
 
 DELETE FROM NTC_DM_CTRL WHERE CFUNZ = '{{ function_name }}';
 
-{% for control in controls %}
-INSERT INTO NTC_DM_CTRL VALUES('{{ control.code }}', 'D', '{{ function_name }}', '{{ control.short_desc }}', '{{ control.error_code }}', '{{ control.long_desc }}', 'Y');
+{% for control in controls %}INSERT INTO NTC_DM_CTRL VALUES('{{ control.code }}', 'D', '{{ function_name }}', '{{ control.short_desc }}', '{{ control.error_code }}', '{{ control.long_desc }}', 'Y');
 {% endfor %}

@@ -17,7 +17,7 @@ Fix ONLY the issues listed by the reviewer. Do not change anything else.
 Common fixes include:
 - Missing or malformed CREATE OR REPLACE / IS / BEGIN / END blocks
 - Incorrect parameter declarations (wrong type, missing comma, wrong direction)
-- Missing or duplicated control blocks
+- Missing control blocks
 - Mismatched function names in CREATE, END, DELETE, INSERT statements
 - Missing or incorrect DELETE/INSERT statements at the bottom
 - Incorrect V_CERR / V_XERR / V_FLG_ATTIVO pattern in control blocks
@@ -51,6 +51,7 @@ class RefinerAgent:
             ("human", REFINER_USER_PROMPT),
         ])
         self.chain = self.prompt | self.llm
+        self.last_responses: dict[str, str] = {}
 
     def refine(self, spec: FunctionSpec, sql_path: str, review: ReviewResult) -> str:
         """Refine a SQL file based on reviewer feedback. Returns the path to the refined file."""
@@ -75,6 +76,8 @@ class RefinerAgent:
             "issues_text": issues_text,
             "sql_content": sql_content,
         })
+
+        self.last_responses[spec.function_name] = response.content
 
         corrected = response.content.strip()
         # Strip markdown code blocks if the LLM wraps them anyway

@@ -58,6 +58,32 @@ def main():
         default=None,
         help="Path to an example SQL file to use as style reference for the LogicAgent (optional)",
     )
+    parser.add_argument(
+        "--skip-logic",
+        action="store_true",
+        help="Skip the LogicAgent step (TODO placeholders will remain)",
+    )
+    parser.add_argument(
+        "--skip-review",
+        action="store_true",
+        help="Skip the Reviewer and Refiner steps",
+    )
+    parser.add_argument(
+        "--skip-refine",
+        action="store_true",
+        help="Skip the Refiner step (a single review is still performed)",
+    )
+    parser.add_argument(
+        "--max-refine",
+        type=int,
+        default=3,
+        help="Maximum number of refine iterations (default: 3)",
+    )
+    parser.add_argument(
+        "--debug-dir",
+        default="debug",
+        help="Directory for debug output of each pipeline phase (default: debug/)",
+    )
 
     args = parser.parse_args()
 
@@ -83,6 +109,7 @@ def main():
         template_dir=args.template_dir,
         output_dir=args.output_dir,
         cache_dir=args.cache_dir,
+        debug_dir=args.debug_dir,
     )
 
     summary = orchestrator.run(
@@ -91,6 +118,10 @@ def main():
         force_parse=args.force_parse,
         start_code=args.start_code,
         example_sql=args.example_sql,
+        max_refine=args.max_refine,
+        skip_logic=args.skip_logic,
+        skip_review=args.skip_review,
+        skip_refine=args.skip_refine,
     )
 
     sys.exit(0 if summary["reviews_failed"] == 0 else 1)

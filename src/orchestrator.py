@@ -1,5 +1,7 @@
 import json
 import os
+import time
+from datetime import datetime
 from langchain_openai import ChatOpenAI
 
 from src.excel_parser import read_excel, group_by_function
@@ -8,6 +10,7 @@ from src.agents.generator_agent import GeneratorAgent
 from src.agents.reviewer_agent import ReviewerAgent
 from src.agents.refiner_agent import RefinerAgent
 from src.agents.logic_agent import LogicAgent
+from src.agents.translator_agent import TranslatorAgent
 from src.models import FunctionSpec, ReviewResult
 
 
@@ -21,6 +24,7 @@ class Orchestrator:
         template_dir: str = ".",
         output_dir: str = "output",
         cache_dir: str = "cache",
+        debug_dir: str = "debug",
     ):
         self.llm = ChatOpenAI(
             model=model,
@@ -31,9 +35,12 @@ class Orchestrator:
         self.generator_agent = GeneratorAgent(template_dir, output_dir)
         self.reviewer_agent = ReviewerAgent(self.llm)
         self.refiner_agent = RefinerAgent(self.llm)
+        self.translator_agent = TranslatorAgent(self.llm)
         self.output_dir = output_dir
         self.cache_dir = cache_dir
         self.cache_path = os.path.join(cache_dir, "parsed_specs.json")
+        self.debug_dir = debug_dir
+        self._run_timestamp: str | None = None
 
     def _load_cache(self) -> list[FunctionSpec] | None:
         """Load parsed specs from cache if available."""
@@ -57,6 +64,44 @@ class Orchestrator:
             json.dump(data, f, indent=2, ensure_ascii=False)
         print(f"  Saved {len(specs)} specs to cache: {self.cache_path}")
 
+    def _debug_path(self, function_name: str, filename: str) -> str:
+        """Return the path to a debug file for a given function."""
+        folder_name = f"{function_name}_{self._run_timestamp}"
+        func_dir = os.path.join(self.debug_dir, folder_name)
+        os.makedirs(func_dir, exist_ok=True)
+        return os.path.join(func_dir, filename)
+
+    def _save_debug(self, function_name: str, filename: str, content: str):
+        """Save debug content to a file."""
+        path = self._debug_path(function_name, filename)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    def _read_sql(self, sql_path: str) -> str:
+        """Read SQL file content for debug snapshots."""
+        with open(sql_path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    def _save_phase_debug(
+        self,
+        phase_prefix: str,
+        function_name: str,
+        responses: dict[str, str],
+        before_sql: str | None = None,
+        after_sql: str | None = None,
+        extra: dict[str, str] | None = None,
+    ):
+        """Save debug files for a pipeline phase."""
+        if function_name in responses:
+            self._save_debug(function_name, f"{phase_prefix}_response.txt", responses[function_name])
+        if before_sql is not None:
+            self._save_debug(function_name, f"{phase_prefix}_before.sql", before_sql)
+        if after_sql is not None:
+            self._save_debug(function_name, f"{phase_prefix}_after.sql", after_sql)
+        if extra:
+            for suffix, content in extra.items():
+                self._save_debug(function_name, f"{phase_prefix}_{suffix}", content)
+
     def _merge_into_cache(self, new_specs: list[FunctionSpec]):
         """Merge newly parsed specs into existing cache (update or append)."""
         cached = self._load_cache() or []
@@ -73,14 +118,22 @@ class Orchestrator:
         force_parse: bool = False,
         start_code: int = 1,
         example_sql: str | None = None,
+        max_refine: int = 3,
+        skip_logic: bool = False,
+        skip_review: bool = False,
+        skip_refine: bool = False,
     ) -> dict:
         """Run the full pipeline and return a summary report."""
+        self._run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        pipeline_start = time.time()
+        timings = {}
         print("=" * 60)
-        print("SQL Package Generator - Multi-Agent Pipeline")
+        print("SQL Package Generator - Multi-Agent Pipeline O.o.O.o.O.o.O.o")
         print("=" * 60)
 
         # Step 1: Read Excel and group by function
         print("\n[Step 1] Reading Excel file...")
+        t0 = time.time()
         df = read_excel(excel_path)
         raw_functions = group_by_function(df)
         print(f"  Found {len(raw_functions)} unique functions in Excel")
@@ -96,8 +149,11 @@ class Orchestrator:
                         "reviews_passed": 0, "reviews_failed": 0,
                         "reviews": [], "output_dir": self.output_dir}
             print(f"  Filtered to function: {function_name}")
+        timings["Excel Parser"] = time.time() - t0
+        print(f"  Time: {timings['Excel Parser']:.2f}s")
 
         # Step 2: Check cache or parse with LLM
+        t0 = time.time()
         cached_specs = self._load_cache() if not force_parse else None
         if cached_specs and not force_parse:
             cached_map = {s.function_name: s for s in cached_specs}
@@ -121,43 +177,140 @@ class Orchestrator:
             specs = self.parser_agent.parse_all(raw_functions, start_code=start_code)
             print(f"  Successfully parsed {len(specs)}/{len(raw_functions)} functions")
             self._merge_into_cache(specs)
+        timings["Parser Agent"] = time.time() - t0
+        print(f"  Time: {timings['Parser Agent']:.2f}s")
+
+        # Debug: save parser output
+        for spec in specs:
+            self._save_phase_debug(
+                "01_parser", spec.function_name,
+                self.parser_agent.last_responses,
+                extra={"spec.json": json.dumps(spec.model_dump(), indent=2, ensure_ascii=False)},
+            )
 
         # Step 3: Generate SQL files
         print("\n[Step 3] Generating SQL files...")
+        t0 = time.time()
         sql_paths = self.generator_agent.generate_all(specs)
         print(f"  Generated {len(sql_paths)} SQL files in {self.output_dir}/")
+        timings["Generator Agent"] = time.time() - t0
+        print(f"  Time: {timings['Generator Agent']:.2f}s")
 
         # Step 4: Complete TODO logic
-        print("\n[Step 4] Completing TODO logic with LogicAgent...")
-        logic_agent = LogicAgent(self.llm, example_sql_path=example_sql)
-        logic_agent.complete_all(specs, sql_paths)
+        if not skip_logic:
+            print("\n[Step 4] Completing TODO logic with LogicAgent...")
+            t0 = time.time()
+            # Snapshot SQL before logic
+            sql_before_logic = {os.path.splitext(os.path.basename(p))[0]: self._read_sql(p) for p in sql_paths}
+            logic_agent = LogicAgent(self.llm, example_sql_path=example_sql)
+            logic_agent.complete_all(specs, sql_paths)
+            # Debug: save logic agent output
+            for p in sql_paths:
+                fname = os.path.splitext(os.path.basename(p))[0]
+                self._save_phase_debug(
+                    "02_logic", fname, logic_agent.last_responses,
+                    before_sql=sql_before_logic.get(fname),
+                    after_sql=self._read_sql(p),
+                )
+            timings["Logic Agent"] = time.time() - t0
+            print(f"  Time: {timings['Logic Agent']:.2f}s")
+        else:
+            print("\n[Step 4] Skipping LogicAgent (--skip-logic)")
 
         # Step 5: Review generated files
-        print("\n[Step 5] Reviewing generated SQL files...")
-        reviews = self.reviewer_agent.review_all(specs, sql_paths)
+        reviews = []
+        if not skip_review:
+            print("\n[Step 5] Reviewing generated SQL files...")
+            t0 = time.time()
+            reviews = self.reviewer_agent.review_all(specs, sql_paths)
+            # Debug: save reviewer output
+            for r in reviews:
+                self._save_phase_debug(
+                    "03_reviewer", r.function_name,
+                    self.reviewer_agent.last_responses,
+                    extra={"result.json": json.dumps(r.model_dump(), indent=2, ensure_ascii=False)},
+                )
+            timings["Reviewer Agent"] = time.time() - t0
+            print(f"  Time: {timings['Reviewer Agent']:.2f}s")
 
-        # Step 6: Refine loop (max 3 iterations)
-        max_refine = 3
-        review_map = {r.function_name: r for r in reviews}
-        for iteration in range(max_refine):
-            failed = [r for r in review_map.values() if r.status == "FAIL"]
-            if not failed:
-                break
-            print(f"\n[Step 6] Refine iteration {iteration + 1}/{max_refine} "
-                  f"({len(failed)} failed files)...")
-            refined_paths = self.refiner_agent.refine_all(specs, sql_paths, failed)
-            if not refined_paths:
-                print("  No files were refined, stopping.")
-                break
-            print(f"\n  Re-reviewing {len(refined_paths)} refined files...")
-            re_reviews = self.reviewer_agent.review_all(specs, refined_paths)
-            for r in re_reviews:
-                review_map[r.function_name] = r
+            # Step 6: Refine loop (max 3 iterations)
+            if not skip_refine:
+                t0 = time.time()
+                review_map = {r.function_name: r for r in reviews}
+                for iteration in range(max_refine+1):
+                    failed = [r for r in review_map.values() if r.status == "FAIL"]
+                    if not failed:
+                        break
+                    print(f"\n[Step 6] Refine iteration {iteration + 1}/{max_refine} "
+                          f"({len(failed)} failed files)...")
+                    # Snapshot SQL before refine
+                    path_map = {os.path.splitext(os.path.basename(p))[0]: p for p in sql_paths}
+                    sql_before_refine = {
+                        fname: self._read_sql(path_map[fname])
+                        for fname in [r.function_name for r in failed]
+                        if fname in path_map
+                    }
+                    refined_paths = self.refiner_agent.refine_all(specs, sql_paths, failed)
+                    # Debug: save refiner output per iteration
+                    for p in refined_paths:
+                        fname = os.path.splitext(os.path.basename(p))[0]
+                        self._save_phase_debug(
+                            f"04_refiner_iter{iteration + 1}", fname,
+                            self.refiner_agent.last_responses,
+                            before_sql=sql_before_refine.get(fname),
+                            after_sql=self._read_sql(p),
+                        )
+                    if not refined_paths:
+                        print("  No files were refined, stopping.")
+                        break
+                    print(f"\n  Re-reviewing {len(refined_paths)} refined files...")
+                    re_reviews = self.reviewer_agent.review_all(specs, refined_paths)
+                    # Debug: save re-review output
+                    for r in re_reviews:
+                        self._save_phase_debug(
+                            f"04_reviewer_iter{iteration + 1}", r.function_name,
+                            self.reviewer_agent.last_responses,
+                            extra={"result.json": json.dumps(r.model_dump(), indent=2, ensure_ascii=False)},
+                        )
+                    for r in re_reviews:
+                        review_map[r.function_name] = r
+                reviews = list(review_map.values())
+                timings["Refiner Agent"] = time.time() - t0
+                print(f"  Time: {timings['Refiner Agent']:.2f}s")
+            else:
+                print("\n[Step 6] Skipping Refiner (--skip-refine)")
+        else:
+            print("\n[Step 5] Skipping Review and Refine (--skip-review)")
 
-        reviews = list(review_map.values())
+        # Step 7: Translate comments to Italian
+        print("\n[Step 7] Translating comments to Italian...")
+        t0 = time.time()
+        # Snapshot SQL before translation
+        sql_before_translate = {
+            os.path.splitext(os.path.basename(p))[0]: self._read_sql(p) for p in sql_paths
+        }
+        self.translator_agent.translate_all(sql_paths)
+        # Debug: save translator output
+        for p in sql_paths:
+            fname = os.path.splitext(os.path.basename(p))[0]
+            self._save_phase_debug(
+                "05_translator", fname,
+                self.translator_agent.last_responses,
+                before_sql=sql_before_translate.get(fname),
+                after_sql=self._read_sql(p),
+            )
+        timings["Translator Agent"] = time.time() - t0
+        print(f"  Time: {timings['Translator Agent']:.2f}s")
+
+        # Debug: save final output
+        for p in sql_paths:
+            fname = os.path.splitext(os.path.basename(p))[0]
+            self._save_debug(fname, "06_final_output.sql", self._read_sql(p))
+
+        timings["Total"] = time.time() - pipeline_start
 
         # Build summary
-        summary = self._build_summary(specs, sql_paths, reviews)
+        summary = self._build_summary(specs, sql_paths, reviews, timings)
         self._print_summary(summary)
 
         return summary
@@ -167,6 +320,7 @@ class Orchestrator:
         specs: list[FunctionSpec],
         sql_paths: list[str],
         reviews: list[ReviewResult],
+        timings: dict[str, float] | None = None,
     ) -> dict:
         passed = sum(1 for r in reviews if r.status == "PASS")
         failed = sum(1 for r in reviews if r.status == "FAIL")
@@ -178,6 +332,7 @@ class Orchestrator:
             "reviews_failed": failed,
             "reviews": [r.model_dump() for r in reviews],
             "output_dir": self.output_dir,
+            "timings": timings or {},
         }
 
     def _print_summary(self, summary: dict):
@@ -197,5 +352,16 @@ class Orchestrator:
                     print(f"    - {review['function_name']}:")
                     for issue in review.get("issues", []):
                         print(f"      * {issue}")
+
+        timings = summary.get("timings", {})
+        if timings:
+            print("\n  Execution times:")
+            for name, elapsed in timings.items():
+                if name == "Total":
+                    continue
+                print(f"    {name:<20s} {elapsed:>7.1f}s")
+            if "Total" in timings:
+                print(f"    {'':─<20s} {'':─>7s}")
+                print(f"    {'Total':<20s} {timings['Total']:>7.1f}s")
 
         print("=" * 60)

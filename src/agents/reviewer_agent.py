@@ -50,6 +50,7 @@ class ReviewerAgent:
             ("human", REVIEWER_USER_PROMPT),
         ])
         self.chain = self.prompt | self.llm
+        self.last_responses: dict[str, str] = {}
 
     def review(self, spec: FunctionSpec, sql_path: str) -> ReviewResult:
         """Review a generated SQL file against its specification."""
@@ -70,6 +71,8 @@ class ReviewerAgent:
             "controls_json": controls_json,
             "sql_content": sql_content,
         })
+
+        self.last_responses[spec.function_name] = response.content
 
         content = response.content.strip()
         if content.startswith("```"):

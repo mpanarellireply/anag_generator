@@ -92,6 +92,7 @@ class ParserAgent:
             ("human", PARSER_USER_PROMPT),
         ])
         self.chain = self.prompt | self.llm
+        self.last_responses: dict[str, str] = {}
 
     @staticmethod
     def _assign_codes(spec: FunctionSpec, start_code: int) -> FunctionSpec:
@@ -120,6 +121,8 @@ class ParserAgent:
             "parametri_input": raw_data.parametri_input,
             "control_rows_json": json.dumps(control_rows, indent=2, ensure_ascii=False),
         })
+
+        self.last_responses[raw_data.function_name] = response.content
 
         # Parse the LLM response as JSON
         content = response.content.strip()

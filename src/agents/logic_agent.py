@@ -49,6 +49,7 @@ class LogicAgent:
 
     def __init__(self, llm: ChatOpenAI, example_sql_path: str | None = None):
         self.llm = llm
+        self.last_responses: dict[str, str] = {}
         self.example_sql = None
         if example_sql_path and os.path.exists(example_sql_path):
             with open(example_sql_path, "r", encoding="utf-8") as f:
@@ -95,6 +96,8 @@ class LogicAgent:
             "controls_json": controls_json,
             "sql_content": sql_content,
         })
+
+        self.last_responses[spec.function_name] = response.content
 
         completed = response.content.strip()
         # Strip markdown code blocks if the LLM wraps them
