@@ -11,14 +11,24 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 
+from src.logging_config import setup_logging
 from src.orchestrator import Orchestrator
 
 load_dotenv()
+setup_logging()
 
 app = FastAPI(title="PL/SQL Generator")
 
-# In-memory job store: job_id -> {status, summary, output_dir, error}
+# In-memory job store: job_id -> {status, summary, output_dir, error, phases}
 jobs: dict[str, dict] = {}
+
+
+def _make_progress_callback(job_id: str):
+    """Create a callback that updates the job's phase progress."""
+    def callback(phase: str, status: str, elapsed: float | None = None):
+        phases = jobs[job_id].setdefault("phases", {})
+        phases[phase] = {"status": status, "elapsed": round(elapsed, 1) if elapsed is not None else None}
+    return callback
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -39,6 +49,7 @@ def _run_pipeline(job_id: str, excel_path: str, params: dict):
             output_dir=output_dir,
             cache_dir=cache_dir,
             debug_dir=debug_dir,
+            progress_callback=_make_progress_callback(job_id),
         )
 
         example_sql_path = None
@@ -60,6 +71,7 @@ def _run_pipeline(job_id: str, excel_path: str, params: dict):
         jobs[job_id]["status"] = "done"
         jobs[job_id]["summary"] = summary
         jobs[job_id]["output_dir"] = output_dir
+        jobs[job_id]["debug_dir"] = debug_dir
 
     except Exception:
         jobs[job_id]["status"] = "error"
@@ -114,7 +126,7 @@ async def run_pipeline(
         "example_sql_name": example_sql_name,
     }
 
-    jobs[job_id] = {"status": "running", "summary": None, "output_dir": None, "error": None}
+    jobs[job_id] = {"status": "running", "summary": None, "output_dir": None, "debug_dir": None, "error": None, "phases": {}}
     thread = threading.Thread(target=_run_pipeline, args=(job_id, excel_path, params), daemon=True)
     thread.start()
 
@@ -130,6 +142,7 @@ async def job_status(job_id: str):
         "status": job["status"],
         "summary": job["summary"],
         "error": job["error"],
+        "phases": job.get("phases", {}),
     }
 
 
@@ -142,6 +155,7 @@ async def download(job_id: str):
         raise HTTPException(status_code=400, detail="Job not finished yet")
 
     output_dir = Path(job["output_dir"])
+    debug_dir = Path(job["debug_dir"])
     if not output_dir.exists():
         raise HTTPException(status_code=404, detail="Output directory not found")
 
@@ -152,7 +166,11 @@ async def download(job_id: str):
     buf = BytesIO()
     with ZipFile(buf, "w") as zf:
         for f in sql_files:
-            zf.write(f, f.name)
+            zf.write(f, f"output/{f.name}")
+        if debug_dir.exists():
+            for f in debug_dir.rglob("*"):
+                if f.is_file():
+                    zf.write(f, f"debug/{f.relative_to(debug_dir)}")
     buf.seek(0)
 
     return StreamingResponse(

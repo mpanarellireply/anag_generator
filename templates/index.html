@@ -16,11 +16,11 @@
   .row > div { flex: 1; }
   .checks { display: flex; gap: 1.2rem; margin-top: 1rem; }
   .checks label { display: inline-flex; align-items: center; gap: .35rem; font-weight: 400; margin-top: 0; }
-  button { margin-top: 1.5rem; padding: .6rem 1.6rem; background: #2563eb; color: #fff; border: none; border-radius: 5px; font-size: .95rem; cursor: pointer; }
+  button { padding: .6rem 1.6rem; background: #2563eb; color: #fff; border: none; border-radius: 5px; font-size: .95rem; cursor: pointer; }
   button:hover { background: #1d4ed8; }
-  button:disabled { background: #93b4f5; cursor: not-allowed; }
+  button:disabled { opacity: 0.6; cursor: not-allowed; }
   #status { margin-top: 1.5rem; padding: 1rem; border-radius: 6px; display: none; }
-  #status.running { display: block; background: #fef3c7; border: 1px solid #f59e0b; }
+  #status.running { display: block; background: #fff; border: 1px solid #e5e7eb; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
   #status.done    { display: block; background: #d1fae5; border: 1px solid #10b981; }
   #status.error   { display: block; background: #fee2e2; border: 1px solid #ef4444; }
   #status a { font-weight: 600; }
@@ -28,6 +28,23 @@
   .summary-table td { padding: .25rem .5rem; }
   .summary-table td:first-child { font-weight: 600; width: 55%; }
   pre.error-detail { margin-top: .5rem; font-size: .78rem; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+
+  /* Stepper */
+  .stepper { display: flex; align-items: flex-start; gap: 0; margin: .5rem 0; overflow-x: auto; }
+  .step { flex: 1; text-align: center; position: relative; min-width: 80px; }
+  .step-icon { width: 28px; height: 28px; border-radius: 50%; margin: 0 auto; display: flex; align-items: center; justify-content: center; font-size: .75rem; font-weight: 700; border: 2px solid #d1d5db; background: #fff; color: #9ca3af; position: relative; z-index: 1; }
+  .step.done .step-icon { background: #10b981; border-color: #10b981; color: #fff; }
+  .step.running .step-icon { background: #fbbf24; border-color: #f59e0b; color: #fff; animation: pulse 1.5s infinite; }
+  .step.skipped .step-icon { background: #e5e7eb; border-color: #d1d5db; color: #9ca3af; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(245,158,11,.4); } 50% { box-shadow: 0 0 0 6px rgba(245,158,11,0); } }
+  .step-label { font-size: .7rem; margin-top: .35rem; color: #6b7280; line-height: 1.2; }
+  .step.done .step-label { color: #065f46; font-weight: 600; }
+  .step.running .step-label { color: #92400e; font-weight: 600; }
+  .step-time { font-size: .65rem; color: #9ca3af; margin-top: .15rem; }
+  .step.done .step-time { color: #059669; }
+  /* Connector line */
+  .step:not(:last-child)::after { content: ''; position: absolute; top: 14px; left: calc(50% + 18px); width: calc(100% - 36px); height: 2px; background: #d1d5db; z-index: 0; }
+  .step.done:not(:last-child)::after { background: #10b981; }
 </style>
 </head>
 <body>
@@ -74,7 +91,10 @@
     <label><input type="checkbox" name="skip_refine"> Skip refine</label>
   </div>
 
-  <button type="submit">Run Pipeline</button>
+  <div style="display:flex;gap:.75rem;margin-top:1.5rem;">
+    <button type="submit">Run Pipeline</button>
+    <button type="button" id="clearBtn" style="background:#6b7280;">Clear</button>
+  </div>
 </form>
 
 <div id="status"></div>
@@ -82,17 +102,57 @@
 <script>
 const form = document.getElementById('pipelineForm');
 const statusDiv = document.getElementById('status');
-const btn = form.querySelector('button');
+const run_btn = form.querySelector('button');
+const clear_btn = document.getElementById('clearBtn');
+
+const PHASES = [
+  'Excel Parser', 'Parser Agent', 'Generator Agent',
+  'Logic Agent', 'Reviewer Agent', 'Refiner Agent', 'Translator Agent'
+];
+
+function fmtTime(seconds) {
+  if (seconds == null) return '';
+  if (seconds < 60) return seconds.toFixed(1) + 's';
+  const m = Math.floor(seconds / 60);
+  const s = (seconds % 60).toFixed(0);
+  return m + 'm ' + s + 's';
+}
+
+function renderStepper(phases) {
+  return '<div class="stepper">' + PHASES.map((name, i) => {
+    const p = phases[name];
+    let cls = 'step';
+    let icon = i + 1;
+    let timeStr = '';
+    if (p) {
+      if (p.status === 'done') { cls += ' done'; icon = '\u2713'; timeStr = fmtTime(p.elapsed); }
+      else if (p.status === 'running') { cls += ' running'; icon = '\u25B6'; }
+      else if (p.status === 'skipped') { cls += ' skipped'; icon = '\u2014'; timeStr = 'skipped'; }
+    }
+    return `<div class="${cls}">
+      <div class="step-icon">${icon}</div>
+      <div class="step-label">${name.replace(' Agent', '').replace(' ', '<br>')}</div>
+      <div class="step-time">${timeStr}</div>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+clear_btn.addEventListener('click', () => {
+  form.reset();
+  statusDiv.className = '';
+  statusDiv.style.display = 'none';
+  statusDiv.innerHTML = '';
+});
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  btn.disabled = true;
+  run_btn.disabled = true;
+  clear_btn.disabled = true;
   statusDiv.className = 'running';
   statusDiv.style.display = 'block';
-  statusDiv.textContent = 'Uploading and starting pipeline...';
+  statusDiv.innerHTML = '<strong>Uploading and starting pipeline...</strong>' + renderStepper({});
 
   const fd = new FormData(form);
-  // Checkboxes: FormData only includes checked ones; server expects bool
   for (const name of ['force_parse', 'skip_logic', 'skip_review', 'skip_refine']) {
     if (!fd.has(name)) fd.set(name, 'false');
     else fd.set(name, 'true');
@@ -105,12 +165,12 @@ form.addEventListener('submit', async (e) => {
       throw new Error(err.detail || res.statusText);
     }
     const { job_id } = await res.json();
-    statusDiv.textContent = 'Pipeline running... this may take a few minutes.';
     pollStatus(job_id);
   } catch (err) {
     statusDiv.className = 'error';
     statusDiv.textContent = 'Failed to start: ' + err.message;
-    btn.disabled = false;
+    run_btn.disabled = false;
+    clear_btn.disabled = false;
   }
 });
 
@@ -120,12 +180,19 @@ async function pollStatus(jobId) {
       const res = await fetch(`/status/${jobId}`);
       const data = await res.json();
 
-      if (data.status === 'done') {
+      if (data.status === 'running') {
+        const phases = data.phases || {};
+        const running = PHASES.find(p => phases[p]?.status === 'running');
+        const label = running ? `Running: ${running}` : 'Pipeline running...';
+        statusDiv.className = 'running';
+        statusDiv.innerHTML = `<strong>${label}</strong>` + renderStepper(phases);
+      } else if (data.status === 'done') {
         clearInterval(poll);
         const s = data.summary;
         statusDiv.className = 'done';
         statusDiv.innerHTML = `
           <strong>Pipeline complete!</strong>
+          ${renderStepper(data.phases || {})}
           <table class="summary-table">
             <tr><td>Functions parsed</td><td>${s.total_functions}</td></tr>
             <tr><td>SQL files generated</td><td>${s.files_generated}</td></tr>
@@ -133,12 +200,14 @@ async function pollStatus(jobId) {
             <tr><td>Reviews failed</td><td>${s.reviews_failed}</td></tr>
           </table>
           <p style="margin-top:.75rem"><a href="/download/${jobId}">Download output (.zip)</a></p>`;
-        btn.disabled = false;
+        run_btn.disabled = false;
+        clear_btn.disabled = false;
       } else if (data.status === 'error') {
         clearInterval(poll);
         statusDiv.className = 'error';
-        statusDiv.innerHTML = `<strong>Pipeline failed</strong><pre class="error-detail">${data.error}</pre>`;
-        btn.disabled = false;
+        statusDiv.innerHTML = `<strong>Pipeline failed</strong>${renderStepper(data.phases || {})}<pre class="error-detail">${data.error}</pre>`;
+        run_btn.disabled = false;
+        clear_btn.disabled = false;
       }
     } catch { /* network blip, keep polling */ }
   }, 10000);

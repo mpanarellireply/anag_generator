@@ -20,6 +20,16 @@ from src.models import FunctionSpec, ReviewResult
 class Orchestrator:
     """Coordinates the Parser -> Generator -> Reviewer pipeline."""
 
+    PHASES = [
+        "Excel Parser",
+        "Parser Agent",
+        "Generator Agent",
+        "Logic Agent",
+        "Reviewer Agent",
+        "Refiner Agent",
+        "Translator Agent",
+    ]
+
     def __init__(
         self,
         openai_api_key: str,
@@ -28,6 +38,7 @@ class Orchestrator:
         output_dir: str = "output",
         cache_dir: str = "cache",
         debug_dir: str = "debug",
+        progress_callback=None,
     ):
         self.llm = ChatOpenAI(
             model=model,
@@ -44,6 +55,12 @@ class Orchestrator:
         self.cache_path = os.path.join(cache_dir, "parsed_specs.json")
         self.debug_dir = debug_dir
         self._run_timestamp: str | None = None
+        self._progress_callback = progress_callback
+
+    def _report_progress(self, phase: str, status: str, elapsed: float | None = None):
+        """Report phase progress via callback. status: 'running' | 'done' | 'skipped'."""
+        if self._progress_callback:
+            self._progress_callback(phase, status, elapsed)
 
     def _load_cache(self) -> list[FunctionSpec] | None:
         """Load parsed specs from cache if available."""
@@ -136,6 +153,7 @@ class Orchestrator:
 
         # Step 1: Read Excel and group by function
         logger.info("[Step 1] Reading Excel file...")
+        self._report_progress("Excel Parser", "running")
         t0 = time.time()
         df = read_excel(excel_path)
         raw_functions = group_by_function(df)
@@ -153,9 +171,11 @@ class Orchestrator:
                         "reviews": [], "output_dir": self.output_dir}
             logger.info("Filtered to function: %s", function_name)
         timings["Excel Parser"] = time.time() - t0
+        self._report_progress("Excel Parser", "done", timings["Excel Parser"])
         logger.debug("Excel Parser time: %.2fs", timings["Excel Parser"])
 
         # Step 2: Check cache or parse with LLM
+        self._report_progress("Parser Agent", "running")
         t0 = time.time()
         cached_specs = self._load_cache() if not force_parse else None
         if cached_specs and not force_parse:
@@ -182,6 +202,7 @@ class Orchestrator:
             logger.info("Successfully parsed %d/%d functions", len(specs), len(raw_functions))
             self._merge_into_cache(specs)
         timings["Parser Agent"] = time.time() - t0
+        self._report_progress("Parser Agent", "done", timings["Parser Agent"])
         logger.debug("Parser Agent time: %.2fs", timings["Parser Agent"])
 
         # Debug: save parser output
@@ -194,15 +215,18 @@ class Orchestrator:
 
         # Step 3: Generate SQL files
         logger.info("[Step 3] Generating SQL files...")
+        self._report_progress("Generator Agent", "running")
         t0 = time.time()
         sql_paths = self.generator_agent.generate_all(specs)
         logger.info("Generated %d SQL files in %s/", len(sql_paths), self.output_dir)
         timings["Generator Agent"] = time.time() - t0
+        self._report_progress("Generator Agent", "done", timings["Generator Agent"])
         logger.debug("Generator Agent time: %.2fs", timings["Generator Agent"])
 
         # Step 4: Complete TODO logic
         if not skip_logic:
             logger.info("[Step 4] Completing TODO logic with LogicAgent...")
+            self._report_progress("Logic Agent", "running")
             t0 = time.time()
             # Snapshot SQL before logic
             sql_before_logic = {os.path.splitext(os.path.basename(p))[0]: self._read_sql(p) for p in sql_paths}
@@ -217,14 +241,17 @@ class Orchestrator:
                     after_sql=self._read_sql(p),
                 )
             timings["Logic Agent"] = time.time() - t0
+            self._report_progress("Logic Agent", "done", timings["Logic Agent"])
             logger.debug("Logic Agent time: %.2fs", timings["Logic Agent"])
         else:
             logger.info("[Step 4] Skipping LogicAgent (--skip-logic)")
+            self._report_progress("Logic Agent", "skipped")
 
         # Step 5: Review generated files
         reviews = []
         if not skip_review:
             logger.info("[Step 5] Reviewing generated SQL files...")
+            self._report_progress("Reviewer Agent", "running")
             t0 = time.time()
             reviews = self.reviewer_agent.review_all(specs, sql_paths)
             # Debug: save reviewer output
@@ -235,11 +262,19 @@ class Orchestrator:
                     extra={"result.json": json.dumps(r.model_dump(), indent=2, ensure_ascii=False)},
                 )
             timings["Reviewer Agent"] = time.time() - t0
+            self._report_progress("Reviewer Agent", "done", timings["Reviewer Agent"])
             logger.debug("Reviewer Agent time: %.2fs", timings["Reviewer Agent"])
+        else:
+            logger.info("[Step 5] Skipping Review (--skip-review)")
+            self._report_progress("Reviewer Agent", "skipped")
 
-            # Step 6: Refine loop (max 3 iterations)
-            if not skip_refine:
-                t0 = time.time()
+        # Step 6: Refine
+        if not skip_refine:
+            self._report_progress("Refiner Agent", "running")
+            t0 = time.time()
+
+            if reviews:
+                # Refine with reviewer feedback (iterative loop)
                 review_map = {r.function_name: r for r in reviews}
                 for iteration in range(max_refine):
                     failed = [r for r in review_map.values() if r.status == "FAIL"]
@@ -279,15 +314,32 @@ class Orchestrator:
                     for r in re_reviews:
                         review_map[r.function_name] = r
                 reviews = list(review_map.values())
-                timings["Refiner Agent"] = time.time() - t0
-                logger.debug("Refiner Agent time: %.2fs", timings["Refiner Agent"])
             else:
-                logger.info("[Step 6] Skipping Refiner (--skip-refine)")
+                # Refine without reviewer feedback (standalone mode)
+                logger.info("[Step 6] Refining SQL files without reviewer feedback...")
+                path_map = {os.path.splitext(os.path.basename(p))[0]: p for p in sql_paths}
+                sql_before_refine = {fname: self._read_sql(p) for fname, p in path_map.items()}
+                refined_paths = self.refiner_agent.refine_all_standalone(specs, sql_paths)
+                # Debug: save standalone refiner output
+                for p in refined_paths:
+                    fname = os.path.splitext(os.path.basename(p))[0]
+                    self._save_phase_debug(
+                        "04_refiner_standalone", fname,
+                        self.refiner_agent.last_responses,
+                        before_sql=sql_before_refine.get(fname),
+                        after_sql=self._read_sql(p),
+                    )
+
+            timings["Refiner Agent"] = time.time() - t0
+            self._report_progress("Refiner Agent", "done", timings["Refiner Agent"])
+            logger.debug("Refiner Agent time: %.2fs", timings["Refiner Agent"])
         else:
-            logger.info("[Step 5] Skipping Review and Refine (--skip-review)")
+            logger.info("[Step 6] Skipping Refiner (--skip-refine)")
+            self._report_progress("Refiner Agent", "skipped")
 
         # Step 7: Translate comments to Italian
         logger.info("[Step 7] Translating comments to Italian...")
+        self._report_progress("Translator Agent", "running")
         t0 = time.time()
         # Snapshot SQL before translation
         sql_before_translate = {
@@ -304,6 +356,7 @@ class Orchestrator:
                 after_sql=self._read_sql(p),
             )
         timings["Translator Agent"] = time.time() - t0
+        self._report_progress("Translator Agent", "done", timings["Translator Agent"])
         logger.debug("Translator Agent time: %.2fs", timings["Translator Agent"])
 
         # Debug: save final output

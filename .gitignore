@@ -5,5 +5,5 @@ __pycache__
 output/
 parser_cache/
 debug/
-log/
+logs/
 jobs/

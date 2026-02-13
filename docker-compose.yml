@@ -11,3 +11,5 @@ services:
       - ./jobs:/app/jobs
       - ./debug:/app/debug
       - ./output:/app/output
+      - ./parser_cache:/app/parser_cache
+      - ./logs:/app/logs

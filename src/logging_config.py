@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 
 
-def setup_logging(log_dir: str = "log", level: logging.Logger = logging.DEBUG) -> None:
+def setup_logging(log_dir: str = "logs", level: logging.Logger = logging.DEBUG) -> None:
     """Configure logging to write to both console and a log file in the log directory."""
     os.makedirs(log_dir, exist_ok=True)
 
