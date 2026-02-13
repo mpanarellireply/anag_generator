@@ -38,9 +38,9 @@ def _run_pipeline(job_id: str, excel_path: str, params: dict):
     """Run the orchestrator pipeline in a background thread."""
     try:
         api_key = os.environ.get("OPENAI_API_KEY", "")
-        output_dir = f"jobs/{job_id}/output"
-        debug_dir = f"jobs/{job_id}/debug"
-        cache_dir = f"jobs/{job_id}/cache"
+        output_dir = "output"
+        debug_dir = f"jobs/{job_id}"
+        cache_dir = "parser_cache"
 
         orchestrator = Orchestrator(
             openai_api_key=api_key,
@@ -156,23 +156,14 @@ async def download(job_id: str):
     if job["status"] != "done":
         raise HTTPException(status_code=400, detail="Job not finished yet")
 
-    output_dir = Path(job["output_dir"])
     debug_dir = Path(job["debug_dir"])
-    if not output_dir.exists():
-        raise HTTPException(status_code=404, detail="Output directory not found")
-
-    sql_files = list(output_dir.glob("*.sql"))
-    if not sql_files:
-        raise HTTPException(status_code=404, detail="No SQL files generated")
 
     buf = BytesIO()
     with ZipFile(buf, "w") as zf:
-        for f in sql_files:
-            zf.write(f, f"output/{f.name}")
         if debug_dir.exists():
             for f in debug_dir.rglob("*"):
                 if f.is_file():
-                    zf.write(f, f"debug/{f.relative_to(debug_dir)}")
+                    zf.write(f, f"{f.relative_to(debug_dir)}")
     buf.seek(0)
 
     return StreamingResponse(
