@@ -1,8 +1,8 @@
 import os
-import uuid
 import shutil
 import threading
 import traceback
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from zipfile import ZipFile
@@ -101,8 +101,10 @@ async def run_pipeline(
     if not api_key:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured on server")
 
-    # Save uploaded Excel
-    job_id = uuid.uuid4().hex[:12]
+    # Build job_id from function name (or excel filename) + timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = function.strip() if function.strip() else Path(excel_file.filename).stem
+    job_id = f"{base_name}_{timestamp}"
     excel_path = str(UPLOAD_DIR / f"{job_id}_{excel_file.filename}")
     with open(excel_path, "wb") as f:
         f.write(await excel_file.read())
