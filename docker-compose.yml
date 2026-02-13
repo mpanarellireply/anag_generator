@@ -1,8 +1,10 @@
 services:
   anag-generator:
+    image: anag-generator
     build: .
     ports:
       - "${PORT}:${PORT}"
+    container_name: anag-generator
     env_file:
       - .env
     environment:

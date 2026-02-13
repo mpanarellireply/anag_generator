@@ -57,3 +57,57 @@ Parsed specs are cached in `parser_cache/parsed_specs.json` after the first run.
 ├── parser_cache/               # Parsed specs cache
 └── output/                  # Generated SQL files
 ```
+
+## Deploy
+
+### 1. Build and export the Docker image
+
+```bash
+# Build the image (use --platform linux/arm64 if the target server is ARM-based)
+docker build --platform linux/arm64 -t anag-generator .
+
+# Save the image as a tar file
+docker save -o anag-generator.tar anag-generator
+
+# Copy the tar to the remote server
+scp anag-generator.tar user@your-server:/tmp/
+```
+
+### 2. Load the image on the server
+
+```bash
+docker load -i /tmp/anag-generator.tar
+
+# Clean up the tar file
+rm /tmp/anag-generator.tar
+```
+
+### 3. Run with Docker Compose
+
+Create a `docker-compose.yml` on the server:
+
+```yaml
+services:
+  anag-generator:
+    image: anag-generator
+    ports:
+      - "${PORT}:${PORT}"
+    env_file:
+      - .env
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./jobs:/app/jobs
+      - ./debug:/app/debug
+      - ./output:/app/output
+      - ./parser_cache:/app/parser_cache
+      - ./logs:/app/logs
+```
+
+Place a `.env` file next to it with your configuration, then start the service:
+
+```bash
+docker compose up -d
+```
+
+The mounted volumes allow you to inspect logs, debug output, generated SQL, parser cache, and jobs directly from the host filesystem.

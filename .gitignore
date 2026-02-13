@@ -1,6 +1,7 @@
 *.env
 *.xlsx
 *.sql
+*.tar
 __pycache__
 output/
 parser_cache/

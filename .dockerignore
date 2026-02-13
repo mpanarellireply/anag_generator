@@ -7,3 +7,4 @@ uploads/
 jobs/
 parser_cache/
 *.xlsx
+.env
