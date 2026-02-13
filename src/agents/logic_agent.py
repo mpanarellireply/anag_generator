@@ -1,9 +1,12 @@
 import json
+import logging
 import os
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
 from src.models import FunctionSpec
+
+logger = logging.getLogger(__name__)
 
 LOGIC_SYSTEM_PROMPT = """You are an expert PL/SQL developer specializing in Oracle validation functions.
 Your job is to replace TODO placeholders in generated SQL validation functions with high-level skeleton logic.
@@ -142,8 +145,8 @@ class LogicAgent:
             try:
                 self.complete(spec_map[fname], path)
                 completed_paths.append(path)
-                print(f"  [Logic] Completed: {fname}")
+                logger.debug("[Logic] Completed: %s", fname)
             except Exception as e:
-                print(f"  [Logic] ERROR completing {fname}: {e}")
+                logger.error("[Logic] ERROR completing %s: %s", fname, e)
 
         return completed_paths

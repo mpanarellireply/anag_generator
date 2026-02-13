@@ -1,10 +1,13 @@
 import json
+import logging
 import traceback
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
 from src.models import FunctionSpec, ControlParam, Control, Variable
 from src.excel_parser import RawFunctionData
+
+logger = logging.getLogger(__name__)
 
 PARSER_SYSTEM_PROMPT = """You are an expert PL/SQL developer analyzing COBOL-to-SQL migration documents.
 Your job is to take raw data extracted from an Excel analysis spreadsheet and produce a structured
@@ -153,10 +156,10 @@ class ParserAgent:
             try:
                 spec = self.parse(raw_data, start_code)
                 specs.append(spec)
-                print(f"  [Parser] Parsed: {spec.function_name} "
-                      f"({len(spec.parameters)} params, {len(spec.controls)} controls, "
-                      f"codes NCD0{start_code:05d}-NCD0{start_code + len(spec.controls) - 1:05d})")
+                logger.debug("[Parser] Parsed: %s (%d params, %d controls, codes NCD0%05d-NCD0%05d)",
+                             spec.function_name, len(spec.parameters), len(spec.controls),
+                             start_code, start_code + len(spec.controls) - 1)
             except Exception as e:
-                print(f"  [Parser] ERROR parsing {raw_data.function_name}: {e}")
-                print(traceback.format_exc())
+                logger.error("[Parser] ERROR parsing %s: %s", raw_data.function_name, e)
+                logger.debug(traceback.format_exc())
         return specs

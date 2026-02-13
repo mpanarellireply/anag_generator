@@ -1,9 +1,12 @@
 import json
+import logging
 import os
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
 from src.models import FunctionSpec, ReviewResult
+
+logger = logging.getLogger(__name__)
 
 REFINER_SYSTEM_PROMPT = """You are an expert PL/SQL developer. Your job is to fix structural and parsing errors
 in generated SQL validation functions based on reviewer feedback.
@@ -112,8 +115,8 @@ class RefinerAgent:
             try:
                 path = self.refine(spec_map[fname], path_map[fname], review)
                 refined_paths.append(path)
-                print(f"  [Refiner] Refined: {fname}")
+                logger.debug("[Refiner] Refined: %s", fname)
             except Exception as e:
-                print(f"  [Refiner] ERROR refining {fname}: {e}")
+                logger.error("[Refiner] ERROR refining %s: %s", fname, e)
 
         return refined_paths

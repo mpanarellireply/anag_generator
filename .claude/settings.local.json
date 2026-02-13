@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(pip install:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(if not exist \"c:\\\\Users\\\\m.panarelli\\\\repos\\\\anag_generator\\\\templates\" mkdir \"c:\\\\Users\\\\m.panarelli\\\\repos\\\\anag_generator\\\\templates\")"
     ]
   }
 }

@@ -1,10 +1,14 @@
 import argparse
+import logging
 import os
 import sys
 
 from dotenv import load_dotenv
 
+from src.logging_config import setup_logging
 from src.orchestrator import Orchestrator
+
+logger = logging.getLogger(__name__)
 
 
 def main():
@@ -87,20 +91,22 @@ def main():
 
     args = parser.parse_args()
 
+    setup_logging()
+
     # Validate inputs
     if not os.path.exists(args.excel_path):
-        print(f"Error: Excel file not found: {args.excel_path}")
+        logger.error("Excel file not found: %s", args.excel_path)
         sys.exit(1)
 
     template_path = os.path.join(args.template_dir, "template.j2")
     if not os.path.exists(template_path):
-        print(f"Error: Template not found: {template_path}")
+        logger.error("Template not found: %s", template_path)
         sys.exit(1)
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        print("Error: OPENAI_API_KEY environment variable not set.")
-        print("Create a .env file with: OPENAI_API_KEY=sk-...")
+        logger.error("OPENAI_API_KEY environment variable not set.")
+        logger.error("Create a .env file with: OPENAI_API_KEY=sk-...")
         sys.exit(1)
 
     orchestrator = Orchestrator(

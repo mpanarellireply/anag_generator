@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PL/SQL Generator</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; background: #f8f9fa; }
+  h1 { font-size: 1.4rem; margin-bottom: 1.5rem; }
+  form { background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  label { display: block; font-size: .85rem; font-weight: 600; margin-top: 1rem; }
+  label:first-child { margin-top: 0; }
+  input[type="file"], input[type="text"], input[type="number"], select { width: 100%; padding: .45rem .55rem; margin-top: .25rem; border: 1px solid #ccc; border-radius: 4px; font-size: .9rem; }
+  .row { display: flex; gap: 1rem; }
+  .row > div { flex: 1; }
+  .checks { display: flex; gap: 1.2rem; margin-top: 1rem; }
+  .checks label { display: inline-flex; align-items: center; gap: .35rem; font-weight: 400; margin-top: 0; }
+  button { margin-top: 1.5rem; padding: .6rem 1.6rem; background: #2563eb; color: #fff; border: none; border-radius: 5px; font-size: .95rem; cursor: pointer; }
+  button:hover { background: #1d4ed8; }
+  button:disabled { background: #93b4f5; cursor: not-allowed; }
+  #status { margin-top: 1.5rem; padding: 1rem; border-radius: 6px; display: none; }
+  #status.running { display: block; background: #fef3c7; border: 1px solid #f59e0b; }
+  #status.done    { display: block; background: #d1fae5; border: 1px solid #10b981; }
+  #status.error   { display: block; background: #fee2e2; border: 1px solid #ef4444; }
+  #status a { font-weight: 600; }
+  .summary-table { width: 100%; margin-top: .75rem; font-size: .85rem; border-collapse: collapse; }
+  .summary-table td { padding: .25rem .5rem; }
+  .summary-table td:first-child { font-weight: 600; width: 55%; }
+  pre.error-detail { margin-top: .5rem; font-size: .78rem; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<h1>PL/SQL Generator</h1>
+<form id="pipelineForm">
+  <label>Excel file *
+    <input type="file" name="excel_file" accept=".xlsx,.xls" required>
+  </label>
+
+  <div class="row">
+    <div>
+      <label>Model
+        <input type="text" name="model" value="gpt-5-mini">
+      </label>
+    </div>
+    <div>
+      <label>Function (blank = all)
+        <input type="text" name="function" placeholder="e.g. NFD_CTRL_FBROK">
+      </label>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Start code
+        <input type="number" name="start_code" value="1" min="1">
+      </label>
+    </div>
+    <div>
+      <label>Max refine iterations
+        <input type="number" name="max_refine" value="1" min="1">
+      </label>
+    </div>
+  </div>
+
+  <label>Example SQL (optional)
+    <input type="file" name="example_sql" accept=".sql">
+  </label>
+
+  <div class="checks">
+    <label><input type="checkbox" name="force_parse"> Force re-parse</label>
+    <label><input type="checkbox" name="skip_logic"> Skip logic</label>
+    <label><input type="checkbox" name="skip_review"> Skip review</label>
+    <label><input type="checkbox" name="skip_refine"> Skip refine</label>
+  </div>
+
+  <button type="submit">Run Pipeline</button>
+</form>
+
+<div id="status"></div>
+
+<script>
+const form = document.getElementById('pipelineForm');
+const statusDiv = document.getElementById('status');
+const btn = form.querySelector('button');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  btn.disabled = true;
+  statusDiv.className = 'running';
+  statusDiv.style.display = 'block';
+  statusDiv.textContent = 'Uploading and starting pipeline...';
+
+  const fd = new FormData(form);
+  // Checkboxes: FormData only includes checked ones; server expects bool
+  for (const name of ['force_parse', 'skip_logic', 'skip_review', 'skip_refine']) {
+    if (!fd.has(name)) fd.set(name, 'false');
+    else fd.set(name, 'true');
+  }
+
+  try {
+    const res = await fetch('/run', { method: 'POST', body: fd });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || res.statusText);
+    }
+    const { job_id } = await res.json();
+    statusDiv.textContent = 'Pipeline running... this may take a few minutes.';
+    pollStatus(job_id);
+  } catch (err) {
+    statusDiv.className = 'error';
+    statusDiv.textContent = 'Failed to start: ' + err.message;
+    btn.disabled = false;
+  }
+});
+
+async function pollStatus(jobId) {
+  const poll = setInterval(async () => {
+    try {
+      const res = await fetch(`/status/${jobId}`);
+      const data = await res.json();
+
+      if (data.status === 'done') {
+        clearInterval(poll);
+        const s = data.summary;
+        statusDiv.className = 'done';
+        statusDiv.innerHTML = `
+          <strong>Pipeline complete!</strong>
+          <table class="summary-table">
+            <tr><td>Functions parsed</td><td>${s.total_functions}</td></tr>
+            <tr><td>SQL files generated</td><td>${s.files_generated}</td></tr>
+            <tr><td>Reviews passed</td><td>${s.reviews_passed}</td></tr>
+            <tr><td>Reviews failed</td><td>${s.reviews_failed}</td></tr>
+          </table>
+          <p style="margin-top:.75rem"><a href="/download/${jobId}">Download output (.zip)</a></p>`;
+        btn.disabled = false;
+      } else if (data.status === 'error') {
+        clearInterval(poll);
+        statusDiv.className = 'error';
+        statusDiv.innerHTML = `<strong>Pipeline failed</strong><pre class="error-detail">${data.error}</pre>`;
+        btn.disabled = false;
+      }
+    } catch { /* network blip, keep polling */ }
+  }, 10000);
+}
+</script>
+</body>
+</html>

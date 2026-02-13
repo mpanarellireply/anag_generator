@@ -1,8 +1,11 @@
 import json
+import logging
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
 from src.models import FunctionSpec, ReviewResult
+
+logger = logging.getLogger(__name__)
 
 REVIEWER_SYSTEM_PROMPT = """You are an expert PL/SQL code reviewer specializing in Oracle validation functions.
 You review generated SQL files for correctness, completeness, and consistency with the source specification.
@@ -107,12 +110,12 @@ class ReviewerAgent:
                 result = self.review(spec_map[fname], path)
                 results.append(result)
                 status_icon = "OK" if result.status == "PASS" else "!!"
-                print(f"  [Reviewer] {status_icon} {fname}: {result.status}")
+                logger.info("[Reviewer] %s %s: %s", status_icon, fname, result.status)
                 if result.issues:
                     for issue in result.issues:
-                        print(f"             - {issue}")
+                        logger.info("[Reviewer]   - %s", issue)
             except Exception as e:
-                print(f"  [Reviewer] ERROR reviewing {fname}: {e}")
+                logger.error("[Reviewer] ERROR reviewing %s: %s", fname, e)
                 results.append(ReviewResult(
                     function_name=fname,
                     status="FAIL",

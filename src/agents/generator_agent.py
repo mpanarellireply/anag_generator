@@ -1,7 +1,10 @@
+import logging
 import os
 from jinja2 import Environment, FileSystemLoader
 
 from src.models import FunctionSpec
+
+logger = logging.getLogger(__name__)
 
 
 class GeneratorAgent:
@@ -39,7 +42,7 @@ class GeneratorAgent:
             try:
                 path = self.generate(spec)
                 paths.append(path)
-                print(f"  [Generator] Generated: {os.path.basename(path)}")
+                logger.debug("[Generator] Generated: %s", os.path.basename(path))
             except Exception as e:
-                print(f"  [Generator] ERROR generating {spec.function_name}: {e}")
+                logger.error("[Generator] ERROR generating %s: %s", spec.function_name, e)
         return paths

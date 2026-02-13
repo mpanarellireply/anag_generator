@@ -1,8 +1,11 @@
 import json
+import logging
 import os
 import time
 from datetime import datetime
 from langchain_openai import ChatOpenAI
+
+logger = logging.getLogger(__name__)
 
 from src.excel_parser import read_excel, group_by_function
 from src.agents.parser_agent import ParserAgent
@@ -50,10 +53,10 @@ class Orchestrator:
             with open(self.cache_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             specs = [FunctionSpec(**item) for item in data]
-            print(f"  Loaded {len(specs)} specs from cache: {self.cache_path}")
+            logger.debug("Loaded %d specs from cache: %s", len(specs), self.cache_path)
             return specs
         except Exception as e:
-            print(f"  Warning: failed to load cache ({e}), will re-parse")
+            logger.warning("Failed to load cache (%s), will re-parse", e)
             return None
 
     def _save_cache(self, specs: list[FunctionSpec]):
@@ -62,7 +65,7 @@ class Orchestrator:
         data = [s.model_dump() for s in specs]
         with open(self.cache_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        print(f"  Saved {len(specs)} specs to cache: {self.cache_path}")
+        logger.debug("Saved %d specs to cache: %s", len(specs), self.cache_path)
 
     def _debug_path(self, function_name: str, filename: str) -> str:
         """Return the path to a debug file for a given function."""
@@ -127,30 +130,30 @@ class Orchestrator:
         self._run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         pipeline_start = time.time()
         timings = {}
-        print("=" * 60)
-        print("SQL Package Generator - Multi-Agent Pipeline O.o.O.o.O.o.O.o")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("SQL Package Generator - Multi-Agent Pipeline O.o.O.o.O.o.O.o")
+        logger.info("=" * 60)
 
         # Step 1: Read Excel and group by function
-        print("\n[Step 1] Reading Excel file...")
+        logger.info("[Step 1] Reading Excel file...")
         t0 = time.time()
         df = read_excel(excel_path)
         raw_functions = group_by_function(df)
-        print(f"  Found {len(raw_functions)} unique functions in Excel")
+        logger.info("Found %d unique functions in Excel", len(raw_functions))
 
         # Filter raw functions early if --function is specified
         if function_name:
             raw_functions = [r for r in raw_functions if r.function_name == function_name]
             if not raw_functions:
                 all_names = [r.function_name for r in group_by_function(df)]
-                print(f"\n  Error: Function '{function_name}' not found in Excel.")
-                print(f"  Available: {', '.join(sorted(all_names)[:10])}...")
+                logger.error("Function '%s' not found in Excel.", function_name)
+                logger.info("Available: %s...", ", ".join(sorted(all_names)[:10]))
                 return {"total_functions": 0, "files_generated": 0,
                         "reviews_passed": 0, "reviews_failed": 0,
                         "reviews": [], "output_dir": self.output_dir}
-            print(f"  Filtered to function: {function_name}")
+            logger.info("Filtered to function: %s", function_name)
         timings["Excel Parser"] = time.time() - t0
-        print(f"  Time: {timings['Excel Parser']:.2f}s")
+        logger.debug("Excel Parser time: %.2fs", timings["Excel Parser"])
 
         # Step 2: Check cache or parse with LLM
         t0 = time.time()
@@ -163,23 +166,23 @@ class Orchestrator:
                              if r.function_name in cached_map]
 
             if to_parse:
-                print(f"\n[Step 2] Parsing {len(to_parse)} new functions with LLM "
-                      f"({len(already_cached)} already cached)...")
+                logger.info("[Step 2] Parsing %d new functions with LLM (%d already cached)...",
+                            len(to_parse), len(already_cached))
                 new_specs = self.parser_agent.parse_all(to_parse, start_code=start_code)
-                print(f"  Successfully parsed {len(new_specs)}/{len(to_parse)} functions")
+                logger.info("Successfully parsed %d/%d functions", len(new_specs), len(to_parse))
                 self._merge_into_cache(new_specs)
                 specs = already_cached + new_specs
             else:
-                print(f"\n[Step 2] All {len(already_cached)} functions loaded from cache")
-                print(f"\n!!!!! IF input xlsx file has changed, please use --force-parse flag !!!!!")
+                logger.info("[Step 2] All %d functions loaded from cache", len(already_cached))
+                logger.warning("IF input xlsx file has changed, please use --force-parse flag")
                 specs = already_cached
         else:
-            print(f"\n[Step 2] Parsing {len(raw_functions)} functions with LLM...")
+            logger.info("[Step 2] Parsing %d functions with LLM...", len(raw_functions))
             specs = self.parser_agent.parse_all(raw_functions, start_code=start_code)
-            print(f"  Successfully parsed {len(specs)}/{len(raw_functions)} functions")
+            logger.info("Successfully parsed %d/%d functions", len(specs), len(raw_functions))
             self._merge_into_cache(specs)
         timings["Parser Agent"] = time.time() - t0
-        print(f"  Time: {timings['Parser Agent']:.2f}s")
+        logger.debug("Parser Agent time: %.2fs", timings["Parser Agent"])
 
         # Debug: save parser output
         for spec in specs:
@@ -190,16 +193,16 @@ class Orchestrator:
             )
 
         # Step 3: Generate SQL files
-        print("\n[Step 3] Generating SQL files...")
+        logger.info("[Step 3] Generating SQL files...")
         t0 = time.time()
         sql_paths = self.generator_agent.generate_all(specs)
-        print(f"  Generated {len(sql_paths)} SQL files in {self.output_dir}/")
+        logger.info("Generated %d SQL files in %s/", len(sql_paths), self.output_dir)
         timings["Generator Agent"] = time.time() - t0
-        print(f"  Time: {timings['Generator Agent']:.2f}s")
+        logger.debug("Generator Agent time: %.2fs", timings["Generator Agent"])
 
         # Step 4: Complete TODO logic
         if not skip_logic:
-            print("\n[Step 4] Completing TODO logic with LogicAgent...")
+            logger.info("[Step 4] Completing TODO logic with LogicAgent...")
             t0 = time.time()
             # Snapshot SQL before logic
             sql_before_logic = {os.path.splitext(os.path.basename(p))[0]: self._read_sql(p) for p in sql_paths}
@@ -214,14 +217,14 @@ class Orchestrator:
                     after_sql=self._read_sql(p),
                 )
             timings["Logic Agent"] = time.time() - t0
-            print(f"  Time: {timings['Logic Agent']:.2f}s")
+            logger.debug("Logic Agent time: %.2fs", timings["Logic Agent"])
         else:
-            print("\n[Step 4] Skipping LogicAgent (--skip-logic)")
+            logger.info("[Step 4] Skipping LogicAgent (--skip-logic)")
 
         # Step 5: Review generated files
         reviews = []
         if not skip_review:
-            print("\n[Step 5] Reviewing generated SQL files...")
+            logger.info("[Step 5] Reviewing generated SQL files...")
             t0 = time.time()
             reviews = self.reviewer_agent.review_all(specs, sql_paths)
             # Debug: save reviewer output
@@ -232,7 +235,7 @@ class Orchestrator:
                     extra={"result.json": json.dumps(r.model_dump(), indent=2, ensure_ascii=False)},
                 )
             timings["Reviewer Agent"] = time.time() - t0
-            print(f"  Time: {timings['Reviewer Agent']:.2f}s")
+            logger.debug("Reviewer Agent time: %.2fs", timings["Reviewer Agent"])
 
             # Step 6: Refine loop (max 3 iterations)
             if not skip_refine:
@@ -242,8 +245,8 @@ class Orchestrator:
                     failed = [r for r in review_map.values() if r.status == "FAIL"]
                     if not failed:
                         break
-                    print(f"\n[Step 6] Refine iteration {iteration + 1}/{max_refine} "
-                          f"({len(failed)} failed files)...")
+                    logger.info("[Step 6] Refine iteration %d/%d (%d failed files)...",
+                                iteration + 1, max_refine, len(failed))
                     # Snapshot SQL before refine
                     path_map = {os.path.splitext(os.path.basename(p))[0]: p for p in sql_paths}
                     sql_before_refine = {
@@ -262,9 +265,9 @@ class Orchestrator:
                             after_sql=self._read_sql(p),
                         )
                     if not refined_paths:
-                        print("  No files were refined, stopping.")
+                        logger.info("No files were refined, stopping.")
                         break
-                    print(f"\n  Re-reviewing {len(refined_paths)} refined files...")
+                    logger.info("Re-reviewing %d refined files...", len(refined_paths))
                     re_reviews = self.reviewer_agent.review_all(specs, refined_paths)
                     # Debug: save re-review output
                     for r in re_reviews:
@@ -277,14 +280,14 @@ class Orchestrator:
                         review_map[r.function_name] = r
                 reviews = list(review_map.values())
                 timings["Refiner Agent"] = time.time() - t0
-                print(f"  Time: {timings['Refiner Agent']:.2f}s")
+                logger.debug("Refiner Agent time: %.2fs", timings["Refiner Agent"])
             else:
-                print("\n[Step 6] Skipping Refiner (--skip-refine)")
+                logger.info("[Step 6] Skipping Refiner (--skip-refine)")
         else:
-            print("\n[Step 5] Skipping Review and Refine (--skip-review)")
+            logger.info("[Step 5] Skipping Review and Refine (--skip-review)")
 
         # Step 7: Translate comments to Italian
-        print("\n[Step 7] Translating comments to Italian...")
+        logger.info("[Step 7] Translating comments to Italian...")
         t0 = time.time()
         # Snapshot SQL before translation
         sql_before_translate = {
@@ -301,7 +304,7 @@ class Orchestrator:
                 after_sql=self._read_sql(p),
             )
         timings["Translator Agent"] = time.time() - t0
-        print(f"  Time: {timings['Translator Agent']:.2f}s")
+        logger.debug("Translator Agent time: %.2fs", timings["Translator Agent"])
 
         # Debug: save final output
         for p in sql_paths:
@@ -337,32 +340,31 @@ class Orchestrator:
         }
 
     def _print_summary(self, summary: dict):
-        print("\n" + "=" * 60)
-        print("SUMMARY")
-        print("=" * 60)
-        print(f"  Functions parsed:   {summary['total_functions']}")
-        print(f"  SQL files generated: {summary['files_generated']}")
-        print(f"  Reviews passed:     {summary['reviews_passed']}")
-        print(f"  Reviews failed:     {summary['reviews_failed']}")
-        print(f"  Output directory:   {summary['output_dir']}")
+        logger.info("=" * 60)
+        logger.info("SUMMARY")
+        logger.info("=" * 60)
+        logger.info("Functions parsed:    %d", summary["total_functions"])
+        logger.info("SQL files generated: %d", summary["files_generated"])
+        logger.info("Reviews passed:      %d", summary["reviews_passed"])
+        logger.info("Reviews failed:      %d", summary["reviews_failed"])
+        logger.info("Output directory:    %s", summary["output_dir"])
 
         if summary["reviews_failed"] > 0:
-            print("\n  Failed reviews:")
+            logger.warning("Failed reviews:")
             for review in summary["reviews"]:
                 if review["status"] == "FAIL":
-                    print(f"    - {review['function_name']}:")
+                    logger.warning("  - %s:", review["function_name"])
                     for issue in review.get("issues", []):
-                        print(f"      * {issue}")
+                        logger.warning("    * %s", issue)
 
         timings = summary.get("timings", {})
         if timings:
-            print("\n  Execution times:")
+            logger.info("Execution times:")
             for name, elapsed in timings.items():
                 if name == "Total":
                     continue
-                print(f"    {name:<20s} {elapsed:>7.1f}s")
+                logger.info("  %-20s %7.1fs", name, elapsed)
             if "Total" in timings:
-                print(f"    {'':─<20s} {'':─>7s}")
-                print(f"    {'Total':<20s} {timings['Total']:>7.1f}s")
+                logger.info("  %-20s %7.1fs", "Total", timings["Total"])
 
-        print("=" * 60)
+        logger.info("=" * 60)

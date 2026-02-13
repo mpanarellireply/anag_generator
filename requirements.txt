@@ -4,3 +4,6 @@ openpyxl
 pandas
 jinja2
 python-dotenv
+fastapi
+uvicorn[standard]
+python-multipart

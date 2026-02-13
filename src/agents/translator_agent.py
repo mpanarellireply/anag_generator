@@ -1,6 +1,9 @@
+import logging
 import os
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
+
+logger = logging.getLogger(__name__)
 
 TRANSLATOR_SYSTEM_PROMPT = """You are a translator specializing in PL/SQL code comments.
 Your job is to translate all comments in a SQL file from English to Italian.
@@ -61,7 +64,7 @@ class TranslatorAgent:
             try:
                 self.translate(path)
                 translated.append(path)
-                print(f"  [Translator] Translated: {fname}")
+                logger.debug("[Translator] Translated: %s", fname)
             except Exception as e:
-                print(f"  [Translator] ERROR translating {fname}: {e}")
+                logger.error("[Translator] ERROR translating %s: %s", fname, e)
         return translated
