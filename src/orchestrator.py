@@ -18,17 +18,26 @@ from src.models import FunctionSpec, ReviewResult
 
 
 class Orchestrator:
-    """Coordinates the Parser -> Generator -> Reviewer pipeline."""
+    """Coordinates the Parser -> Generator -> Reviewer pipeline.
 
-    PHASES = [
+    Processes functions one at a time: bulk parse first, then per-function
+    Generate -> Logic -> Review -> Refine -> Translate.
+    """
+
+    GLOBAL_PHASES = [
         "Excel Parser",
         "Parser Agent",
+    ]
+
+    PER_FUNCTION_PHASES = [
         "Generator Agent",
         "Logic Agent",
         "Reviewer Agent",
         "Refiner Agent",
         "Translator Agent",
     ]
+
+    PHASES = GLOBAL_PHASES + PER_FUNCTION_PHASES
 
     def __init__(
         self,
@@ -57,10 +66,22 @@ class Orchestrator:
         self._run_timestamp: str | None = None
         self._progress_callback = progress_callback
 
-    def _report_progress(self, phase: str, status: str, elapsed: float | None = None):
-        """Report phase progress via callback. status: 'running' | 'done' | 'skipped'."""
+    def _report_progress(
+        self,
+        phase: str,
+        status: str,
+        elapsed: float | None = None,
+        function_name: str | None = None,
+        meta: dict | None = None,
+    ):
+        """Report phase progress via callback.
+
+        status: 'running' | 'done' | 'skipped' | 'error'
+        function_name: None for global phases, str for per-function phases.
+        meta: extra data for sentinel events.
+        """
         if self._progress_callback:
-            self._progress_callback(phase, status, elapsed)
+            self._progress_callback(phase, status, elapsed, function_name, meta)
 
     def _load_cache(self) -> list[FunctionSpec] | None:
         """Load parsed specs from cache if available."""
@@ -126,17 +147,144 @@ class Orchestrator:
         all_specs = list(cache_map.values())
         self._save_cache(all_specs)
 
-    def _save_sql_map(self, sql_map: dict[str, str]):
-        """Write all SQL contents to output files."""
-        logger.info("Saving SQL files to %s", self.output_dir)
-        logger.info("    contents: %s", sql_map)
+    def _save_single_sql(self, function_name: str, sql_content: str) -> str:
+        """Write a single SQL file to the output directory. Returns the output path."""
         os.makedirs(self.output_dir, exist_ok=True)
-        self.saved_files = []
-        for fname, sql_content in sql_map.items():
-            output_path = os.path.join(self.output_dir, f"{fname}_{self._run_timestamp}.sql")
-            with open(output_path, "w", encoding="utf-8") as f:
-                f.write(sql_content)
-            self.saved_files.append(output_path)
+        output_path = os.path.join(self.output_dir, f"{function_name}_{self._run_timestamp}.sql")
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(sql_content)
+        return output_path
+
+    def _run_function_pipeline(
+        self,
+        spec: FunctionSpec,
+        logic_agent: LogicAgent | None,
+        max_refine: int = 3,
+        skip_logic: bool = False,
+        skip_review: bool = False,
+        skip_refine: bool = False,
+    ) -> tuple[str | None, ReviewResult | None, dict[str, float]]:
+        """Run pipeline phases for a single function.
+
+        Returns: (final_sql or None, review_result or None, timings dict)
+        If Generator fails, returns (None, None, timings) — function is skipped.
+        """
+        fname = spec.function_name
+        timings: dict[str, float] = {}
+        sql: str | None = None
+        review: ReviewResult | None = None
+
+        # --- Generator ---
+        self._report_progress("Generator Agent", "running", function_name=fname)
+        t0 = time.time()
+        try:
+            sql = self.generator_agent.generate(spec)
+        except Exception as e:
+            logger.error("[Generator] FATAL for %s: %s", fname, e)
+            timings["Generator Agent"] = time.time() - t0
+            self._report_progress("Generator Agent", "error", timings["Generator Agent"], function_name=fname)
+            return None, None, timings
+        timings["Generator Agent"] = time.time() - t0
+        self._report_progress("Generator Agent", "done", timings["Generator Agent"], function_name=fname)
+
+        # --- Logic ---
+        if not skip_logic and logic_agent is not None:
+            self._report_progress("Logic Agent", "running", function_name=fname)
+            t0 = time.time()
+            try:
+                sql_before = sql
+                sql = logic_agent.complete(spec, sql)
+                self._save_phase_debug(
+                    "02_logic", fname, logic_agent.last_responses,
+                    before_sql=sql_before, after_sql=sql,
+                )
+            except Exception as e:
+                logger.error("[Logic] ERROR for %s: %s -- continuing with template SQL", fname, e)
+            timings["Logic Agent"] = time.time() - t0
+            self._report_progress("Logic Agent", "done", timings["Logic Agent"], function_name=fname)
+        else:
+            self._report_progress("Logic Agent", "skipped", function_name=fname)
+
+        # --- Reviewer ---
+        if not skip_review:
+            self._report_progress("Reviewer Agent", "running", function_name=fname)
+            t0 = time.time()
+            try:
+                review = self.reviewer_agent.review(spec, sql)
+                self._save_phase_debug(
+                    "03_reviewer", fname, self.reviewer_agent.last_responses,
+                    extra={"result.json": json.dumps(review.model_dump(), indent=2, ensure_ascii=False)},
+                )
+            except Exception as e:
+                logger.error("[Reviewer] ERROR for %s: %s", fname, e)
+            timings["Reviewer Agent"] = time.time() - t0
+            self._report_progress("Reviewer Agent", "done", timings["Reviewer Agent"], function_name=fname)
+        else:
+            self._report_progress("Reviewer Agent", "skipped", function_name=fname)
+
+        # --- Refiner ---
+        if not skip_refine:
+            self._report_progress("Refiner Agent", "running", function_name=fname)
+            t0 = time.time()
+
+            if review and review.status == "FAIL":
+                # Iterative refine with reviewer feedback
+                for iteration in range(max_refine):
+                    if review.status != "FAIL":
+                        break
+                    try:
+                        sql_before = sql
+                        sql = self.refiner_agent.refine(spec, sql, review)
+                        self._save_phase_debug(
+                            f"04_refiner_iter{iteration + 1}", fname,
+                            self.refiner_agent.last_responses,
+                            before_sql=sql_before, after_sql=sql,
+                        )
+                        # Re-review
+                        review = self.reviewer_agent.review(spec, sql)
+                        self._save_phase_debug(
+                            f"04_reviewer_iter{iteration + 1}", fname,
+                            self.reviewer_agent.last_responses,
+                            extra={"result.json": json.dumps(review.model_dump(), indent=2, ensure_ascii=False)},
+                        )
+                    except Exception as e:
+                        logger.error("[Refiner] ERROR iter %d for %s: %s", iteration + 1, fname, e)
+                        break
+            elif not review and not skip_review:
+                # Standalone refine (reviewer failed, no review available)
+                try:
+                    sql_before = sql
+                    sql = self.refiner_agent.refine_standalone(spec, sql)
+                    self._save_phase_debug(
+                        "04_refiner_standalone", fname,
+                        self.refiner_agent.last_responses,
+                        before_sql=sql_before, after_sql=sql,
+                    )
+                except Exception as e:
+                    logger.error("[Refiner] ERROR standalone for %s: %s", fname, e)
+            # else: review.status == "PASS" or skip_review -> nothing to refine
+
+            timings["Refiner Agent"] = time.time() - t0
+            self._report_progress("Refiner Agent", "done", timings["Refiner Agent"], function_name=fname)
+        else:
+            self._report_progress("Refiner Agent", "skipped", function_name=fname)
+
+        # --- Translator ---
+        self._report_progress("Translator Agent", "running", function_name=fname)
+        t0 = time.time()
+        try:
+            sql_before = sql
+            sql = self.translator_agent.translate(sql, function_name=fname)
+            self._save_phase_debug(
+                "05_translator", fname, self.translator_agent.last_responses,
+                before_sql=sql_before, after_sql=sql,
+            )
+        except Exception as e:
+            logger.error("[Translator] ERROR for %s: %s -- using untranslated SQL", fname, e)
+        timings["Translator Agent"] = time.time() - t0
+        self._report_progress("Translator Agent", "done", timings["Translator Agent"], function_name=fname)
+
+        return sql, review, timings
 
     def run(
         self,
@@ -151,13 +299,20 @@ class Orchestrator:
         skip_review: bool = False,
         skip_refine: bool = False,
     ) -> dict:
-        """Run the full pipeline and return a summary report."""
+        """Run the full pipeline and return a summary report.
+
+        Stage A (bulk): Excel Parser + Parser Agent for all functions.
+        Stage B (per-function): Generate -> Logic -> Review -> Refine -> Translate one at a time.
+        """
         self._run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         pipeline_start = time.time()
-        timings = {}
+        timings: dict[str, float] = {}
+        self.saved_files: list[str] = []
         logger.info("=" * 60)
         logger.info("SQL Package Generator - Multi-Agent Pipeline O.o.O.o.O.o.O.o")
         logger.info("=" * 60)
+
+        # ========== STAGE A: Bulk Parse ==========
 
         # Step 1: Read Excel and group by function
         logger.info("[Step 1] Reading Excel file...")
@@ -221,158 +376,67 @@ class Orchestrator:
                 extra={"spec.json": json.dumps(spec.model_dump(), indent=2, ensure_ascii=False)},
             )
 
-        # Step 3: Generate SQL content
-        logger.info("[Step 3] Generating SQL...")
-        self._report_progress("Generator Agent", "running")
-        t0 = time.time()
-        sql_map = self.generator_agent.generate_all(specs)
-        logger.info("Generated SQL for %d functions", len(sql_map))
-        timings["Generator Agent"] = time.time() - t0
-        self._report_progress("Generator Agent", "done", timings["Generator Agent"])
-        logger.debug("Generator Agent time: %.2fs", timings["Generator Agent"])
+        # Notify discovered function names (for web UI to render function list)
+        discovered_names = [s.function_name for s in specs]
+        self._report_progress(
+            "__functions_discovered__", "done",
+            meta={"function_names": discovered_names},
+        )
 
-        # Step 4: Complete TODO logic
-        if not skip_logic:
-            logger.info("[Step 4] Completing TODO logic with LogicAgent...")
-            self._report_progress("Logic Agent", "running")
-            t0 = time.time()
-            # Snapshot SQL before logic
-            sql_before_logic = dict(sql_map)
-            logic_agent = LogicAgent(self.llm, example_sql_path=example_sql)
-            sql_map = logic_agent.complete_all(specs, sql_map)
-            # Debug: save logic agent output
-            for fname in sql_map:
-                self._save_phase_debug(
-                    "02_logic", fname, logic_agent.last_responses,
-                    before_sql=sql_before_logic.get(fname),
-                    after_sql=sql_map.get(fname),
-                )
-            timings["Logic Agent"] = time.time() - t0
-            self._report_progress("Logic Agent", "done", timings["Logic Agent"])
-            logger.debug("Logic Agent time: %.2fs", timings["Logic Agent"])
-        else:
-            logger.info("[Step 4] Skipping LogicAgent (--skip-logic)")
-            self._report_progress("Logic Agent", "skipped")
+        # ========== STAGE B: Per-Function Pipeline ==========
 
-        # Step 5: Review generated SQL
-        reviews = []
-        if not skip_review:
-            logger.info("[Step 5] Reviewing generated SQL...")
-            self._report_progress("Reviewer Agent", "running")
-            t0 = time.time()
-            reviews = self.reviewer_agent.review_all(specs, sql_map)
-            # Debug: save reviewer output
-            for r in reviews:
-                self._save_phase_debug(
-                    "03_reviewer", r.function_name,
-                    self.reviewer_agent.last_responses,
-                    extra={"result.json": json.dumps(r.model_dump(), indent=2, ensure_ascii=False)},
-                )
-            timings["Reviewer Agent"] = time.time() - t0
-            self._report_progress("Reviewer Agent", "done", timings["Reviewer Agent"])
-            logger.debug("Reviewer Agent time: %.2fs", timings["Reviewer Agent"])
-        else:
-            logger.info("[Step 5] Skipping Review (--skip-review)")
-            self._report_progress("Reviewer Agent", "skipped")
+        # Create LogicAgent once (avoids re-reading example SQL per function)
+        logic_agent = LogicAgent(self.llm, example_sql_path=example_sql) if not skip_logic else None
 
-        # Step 6: Refine
-        if not skip_refine:
-            self._report_progress("Refiner Agent", "running")
-            t0 = time.time()
+        all_reviews: list[ReviewResult] = []
+        sql_map: dict[str, str] = {}
 
-            if reviews:
-                # Refine with reviewer feedback (iterative loop)
-                review_map = {r.function_name: r for r in reviews}
-                for iteration in range(max_refine):
-                    failed = [r for r in review_map.values() if r.status == "FAIL"]
-                    if not failed:
-                        break
-                    logger.info("[Step 6] Refine iteration %d/%d (%d failed files)...",
-                                iteration + 1, max_refine, len(failed))
-                    # Snapshot SQL before refine
-                    sql_before_refine = {r.function_name: sql_map[r.function_name]
-                                         for r in failed if r.function_name in sql_map}
-                    refined = self.refiner_agent.refine_all(specs, sql_map, failed)
-                    # Debug: save refiner output per iteration
-                    for fname, refined_sql in refined.items():
-                        self._save_phase_debug(
-                            f"04_refiner_iter{iteration + 1}", fname,
-                            self.refiner_agent.last_responses,
-                            before_sql=sql_before_refine.get(fname),
-                            after_sql=refined_sql,
-                        )
-                    if not refined:
-                        logger.info("No files were refined, stopping.")
-                        break
-                    # Update sql_map with refined content
-                    sql_map.update(refined)
-                    # Re-review only the refined functions
-                    refined_sql_map = {fname: sql_map[fname] for fname in refined}
-                    logger.info("Re-reviewing %d refined files...", len(refined))
-                    re_reviews = self.reviewer_agent.review_all(specs, refined_sql_map)
-                    # Debug: save re-review output
-                    for r in re_reviews:
-                        self._save_phase_debug(
-                            f"04_reviewer_iter{iteration + 1}", r.function_name,
-                            self.reviewer_agent.last_responses,
-                            extra={"result.json": json.dumps(r.model_dump(), indent=2, ensure_ascii=False)},
-                        )
-                    for r in re_reviews:
-                        review_map[r.function_name] = r
-                reviews = list(review_map.values())
-            else:
-                # Refine without reviewer feedback (standalone mode)
-                logger.info("[Step 6] Refining SQL without reviewer feedback...")
-                sql_before_refine = dict(sql_map)
-                refined = self.refiner_agent.refine_all_standalone(specs, sql_map)
-                # Debug: save standalone refiner output
-                for fname, refined_sql in refined.items():
-                    self._save_phase_debug(
-                        "04_refiner_standalone", fname,
-                        self.refiner_agent.last_responses,
-                        before_sql=sql_before_refine.get(fname),
-                        after_sql=refined_sql,
-                    )
-                # Update sql_map with refined content
-                sql_map.update(refined)
+        for i, spec in enumerate(specs):
+            fname = spec.function_name
+            logger.info("=" * 40)
+            logger.info("Processing function %d/%d: %s", i + 1, len(specs), fname)
+            logger.info("=" * 40)
 
-            timings["Refiner Agent"] = time.time() - t0
-            self._report_progress("Refiner Agent", "done", timings["Refiner Agent"])
-            logger.debug("Refiner Agent time: %.2fs", timings["Refiner Agent"])
-        else:
-            logger.info("[Step 6] Skipping Refiner (--skip-refine)")
-            self._report_progress("Refiner Agent", "skipped")
-
-        # Step 7: Translate comments to Italian
-        logger.info("[Step 7] Translating comments to Italian...")
-        self._report_progress("Translator Agent", "running")
-        t0 = time.time()
-        # Snapshot SQL before translation
-        sql_before_translate = dict(sql_map)
-        sql_map = self.translator_agent.translate_all(sql_map)
-        # Debug: save translator output
-        for fname in sql_map:
-            self._save_phase_debug(
-                "05_translator", fname,
-                self.translator_agent.last_responses,
-                before_sql=sql_before_translate.get(fname),
-                after_sql=sql_map.get(fname),
+            sql, review, _ = self._run_function_pipeline(
+                spec,
+                logic_agent=logic_agent,
+                max_refine=max_refine,
+                skip_logic=skip_logic,
+                skip_review=skip_review,
+                skip_refine=skip_refine,
             )
-        timings["Translator Agent"] = time.time() - t0
-        self._report_progress("Translator Agent", "done", timings["Translator Agent"])
-        logger.debug("Translator Agent time: %.2fs", timings["Translator Agent"])
 
-        # Save final SQL files to output directory
-        self._save_sql_map(sql_map)
+            if sql is None:
+                logger.error("Function %s FAILED entirely -- skipping", fname)
+                self._report_progress(
+                    "__function_error__", "error",
+                    function_name=fname,
+                    meta={"error": f"Generation failed for {fname}"},
+                )
+                continue
 
-        # Debug: save final output
-        for fname, sql_content in sql_map.items():
-            self._save_debug(fname, f"{fname}_{self._run_timestamp}.sql", sql_content)
+            # Save immediately
+            output_path = self._save_single_sql(fname, sql)
+            self.saved_files.append(output_path)
+            sql_map[fname] = sql
+
+            if review:
+                all_reviews.append(review)
+
+            # Save final debug
+            self._save_debug(fname, f"{fname}_{self._run_timestamp}.sql", sql)
+
+            # Notify that this function is fully done
+            self._report_progress(
+                "__function_done__", "done",
+                function_name=fname,
+                meta={"output_file": output_path},
+            )
 
         timings["Total"] = time.time() - pipeline_start
 
         # Build summary
-        summary = self._build_summary(specs, sql_map, reviews, timings)
+        summary = self._build_summary(specs, sql_map, all_reviews, timings)
         self._print_summary(summary)
 
         return summary

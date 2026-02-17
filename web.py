@@ -1,5 +1,4 @@
 import os
-import shutil
 import threading
 import traceback
 from datetime import datetime
@@ -19,16 +18,65 @@ setup_logging()
 
 app = FastAPI(title="PL/SQL Generator")
 
-# In-memory job store: job_id -> {status, summary, output_dir, error, phases}
+# In-memory job store
 jobs: dict[str, dict] = {}
 
 
 def _make_progress_callback(job_id: str):
-    """Create a callback that updates the job's phase progress."""
-    def callback(phase: str, status: str, elapsed: float | None = None):
-        phases = jobs[job_id].setdefault("phases", {})
-        phases[phase] = {"status": status, "elapsed": round(elapsed, 1) if elapsed is not None else None}
+    """Create a callback that updates the job's per-function and global phase progress."""
+    def callback(
+        phase: str,
+        status: str,
+        elapsed: float | None = None,
+        function_name: str | None = None,
+        meta: dict | None = None,
+    ):
+        job = jobs[job_id]
+        elapsed_rounded = round(elapsed, 1) if elapsed is not None else None
+
+        # Handle sentinel pseudo-phases
+        if phase == "__functions_discovered__":
+            names = (meta or {}).get("function_names", [])
+            job["function_names"] = names
+            job["functions"] = {
+                name: {"status": "pending", "error": None, "output_file": None, "phases": {}}
+                for name in names
+            }
+            return
+
+        if phase == "__function_done__":
+            if function_name and function_name in job.get("functions", {}):
+                job["functions"][function_name]["status"] = "done"
+                output_path = (meta or {}).get("output_file")
+                if output_path:
+                    job["functions"][function_name]["output_file"] = output_path
+                    job.setdefault("output_files", []).append(output_path)
+            return
+
+        if phase == "__function_error__":
+            if function_name and function_name in job.get("functions", {}):
+                job["functions"][function_name]["status"] = "error"
+                job["functions"][function_name]["error"] = (meta or {}).get("error", "Unknown error")
+            return
+
+        # Normal phase update
+        if function_name is None:
+            # Global phase (Excel Parser, Parser Agent)
+            job.setdefault("global_phases", {})[phase] = {
+                "status": status, "elapsed": elapsed_rounded,
+            }
+        else:
+            # Per-function phase
+            funcs = job.setdefault("functions", {})
+            func = funcs.setdefault(function_name, {
+                "status": "running", "error": None, "output_file": None, "phases": {},
+            })
+            if func["status"] == "pending":
+                func["status"] = "running"
+            func["phases"][phase] = {"status": status, "elapsed": elapsed_rounded}
+
     return callback
+
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -131,7 +179,16 @@ async def run_pipeline(
         "example_sql_name": example_sql_name,
     }
 
-    jobs[job_id] = {"status": "running", "summary": None, "output_files": None, "debug_dir": None, "error": None, "phases": {}}
+    jobs[job_id] = {
+        "status": "running",
+        "summary": None,
+        "output_files": [],
+        "debug_dir": None,
+        "error": None,
+        "function_names": [],
+        "global_phases": {},
+        "functions": {},
+    }
     thread = threading.Thread(target=_run_pipeline, args=(job_id, excel_path, params), daemon=True)
     thread.start()
 
@@ -147,12 +204,14 @@ async def job_status(job_id: str):
         "status": job["status"],
         "summary": job["summary"],
         "error": job["error"],
-        "phases": job.get("phases", {}),
+        "function_names": job.get("function_names", []),
+        "global_phases": job.get("global_phases", {}),
+        "functions": job.get("functions", {}),
     }
 
 
 @app.get("/download/debug/{job_id}")
-async def download(job_id: str):
+async def download_debug(job_id: str):
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -172,27 +231,52 @@ async def download(job_id: str):
     return StreamingResponse(
         buf,
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename=output_{job_id}.zip"},
+        headers={"Content-Disposition": f"attachment; filename=debug_{job_id}.zip"},
     )
 
+
+@app.get("/download/{job_id}/{function_name}")
+async def download_function(job_id: str, function_name: str):
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    func_info = job.get("functions", {}).get(function_name)
+    if not func_info:
+        raise HTTPException(status_code=404, detail="Function not found in this job")
+    if func_info["status"] != "done" or not func_info.get("output_file"):
+        raise HTTPException(status_code=400, detail="Function output not ready yet")
+
+    file_path = func_info["output_file"]
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Output file not found on disk")
+
+    filename = os.path.basename(file_path)
+    with open(file_path, "rb") as f:
+        content = f.read()
+
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/sql",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 @app.get("/download/{job_id}")
-async def download(job_id: str):
+async def download_all(job_id: str):
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     if job["status"] != "done":
         raise HTTPException(status_code=400, detail="Job not finished yet")
 
-    final_files = job["output_files"]
-    print("-" * 80)
-    print(final_files)
-    print("-" * 80)
+    final_files = job.get("output_files", [])
 
     buf = BytesIO()
     with ZipFile(buf, "w") as zf:
         for f in final_files:
             if os.path.exists(f):
-                zf.write(f)
+                zf.write(f, os.path.basename(f))
     buf.seek(0)
 
     return StreamingResponse(

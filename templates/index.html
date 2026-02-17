@@ -29,13 +29,14 @@
   .summary-table td:first-child { font-weight: 600; width: 55%; }
   pre.error-detail { margin-top: .5rem; font-size: .78rem; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
 
-  /* Stepper */
+  /* Stepper (shared) */
   .stepper { display: flex; align-items: flex-start; gap: 0; margin: .5rem 0; overflow-x: auto; }
   .step { flex: 1; text-align: center; position: relative; min-width: 80px; }
   .step-icon { width: 28px; height: 28px; border-radius: 50%; margin: 0 auto; display: flex; align-items: center; justify-content: center; font-size: .75rem; font-weight: 700; border: 2px solid #d1d5db; background: #fff; color: #9ca3af; position: relative; z-index: 1; }
   .step.done .step-icon { background: #10b981; border-color: #10b981; color: #fff; }
   .step.running .step-icon { background: #fbbf24; border-color: #f59e0b; color: #fff; animation: pulse 1.5s infinite; }
   .step.skipped .step-icon { background: #e5e7eb; border-color: #d1d5db; color: #9ca3af; }
+  .step.error .step-icon { background: #ef4444; border-color: #ef4444; color: #fff; }
   @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(245,158,11,.4); } 50% { box-shadow: 0 0 0 6px rgba(245,158,11,0); } }
   .step-label { font-size: .7rem; margin-top: .35rem; color: #6b7280; line-height: 1.2; }
   .step.done .step-label { color: #065f46; font-weight: 600; }
@@ -45,6 +46,37 @@
   /* Connector line */
   .step:not(:last-child)::after { content: ''; position: absolute; top: 14px; left: calc(50% + 18px); width: calc(100% - 36px); height: 2px; background: #d1d5db; z-index: 0; }
   .step.done:not(:last-child)::after { background: #10b981; }
+
+  /* Smaller stepper for function cards */
+  .stepper-sm .step { min-width: 60px; }
+  .stepper-sm .step-icon { width: 22px; height: 22px; font-size: .65rem; }
+  .stepper-sm .step-label { font-size: .6rem; }
+  .stepper-sm .step-time { font-size: .55rem; }
+  .stepper-sm .step:not(:last-child)::after { top: 11px; left: calc(50% + 14px); width: calc(100% - 28px); }
+
+  /* Function cards */
+  .function-list { margin-top: 1rem; }
+  .function-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: .75rem 1rem; margin-bottom: .5rem; }
+  .function-card.done { border-left: 3px solid #10b981; }
+  .function-card.running { border-left: 3px solid #f59e0b; }
+  .function-card.error { border-left: 3px solid #ef4444; }
+  .function-card.pending { border-left: 3px solid #d1d5db; }
+  .fn-header { display: flex; align-items: center; gap: .75rem; margin-bottom: .35rem; }
+  .fn-name { font-weight: 600; font-size: .85rem; font-family: monospace; }
+  .fn-status-badge { font-size: .65rem; padding: .1rem .45rem; border-radius: 10px; font-weight: 600; text-transform: uppercase; }
+  .fn-status-badge.done { background: #d1fae5; color: #065f46; }
+  .fn-status-badge.running { background: #fef3c7; color: #92400e; }
+  .fn-status-badge.error { background: #fee2e2; color: #991b1b; }
+  .fn-status-badge.pending { background: #f3f4f6; color: #6b7280; }
+  .fn-download-btn { margin-left: auto; font-size: .75rem; padding: .2rem .65rem; background: #2563eb; color: #fff; border-radius: 4px; text-decoration: none; font-weight: 600; }
+  .fn-download-btn:hover { background: #1d4ed8; }
+
+  /* Download links section */
+  .download-links { margin-top: 1rem; display: flex; gap: 1rem; flex-wrap: wrap; }
+  .download-links a { padding: .4rem 1rem; background: #2563eb; color: #fff; border-radius: 5px; text-decoration: none; font-size: .85rem; font-weight: 600; }
+  .download-links a:hover { background: #1d4ed8; }
+  .download-links a.secondary { background: #6b7280; }
+  .download-links a.secondary:hover { background: #4b5563; }
 </style>
 </head>
 <body>
@@ -110,10 +142,8 @@ const statusDiv = document.getElementById('status');
 const run_btn = form.querySelector('button');
 const clear_btn = document.getElementById('clearBtn');
 
-const PHASES = [
-  'Excel Parser', 'Parser Agent', 'Generator Agent',
-  'Logic Agent', 'Reviewer Agent', 'Refiner Agent', 'Translator Agent'
-];
+const GLOBAL_PHASES = ['Excel Parser', 'Parser Agent'];
+const FUNCTION_PHASES = ['Generator Agent', 'Logic Agent', 'Reviewer Agent', 'Refiner Agent', 'Translator Agent'];
 
 function fmtTime(seconds) {
   if (seconds == null) return '';
@@ -123,21 +153,68 @@ function fmtTime(seconds) {
   return m + 'm ' + s + 's';
 }
 
-function renderStepper(phases) {
-  return '<div class="stepper">' + PHASES.map((name, i) => {
-    const p = phases[name];
-    let cls = 'step';
-    let icon = i + 1;
-    let timeStr = '';
-    if (p) {
-      if (p.status === 'done') { cls += ' done'; icon = '\u2713'; timeStr = fmtTime(p.elapsed); }
-      else if (p.status === 'running') { cls += ' running'; icon = '\u25B6'; }
-      else if (p.status === 'skipped') { cls += ' skipped'; icon = '\u2014'; timeStr = 'skipped'; }
+function stepHtml(name, i, phases, labelTransform) {
+  const p = phases[name];
+  let cls = 'step';
+  let icon = i + 1;
+  let timeStr = '';
+  if (p) {
+    if (p.status === 'done') { cls += ' done'; icon = '\u2713'; timeStr = fmtTime(p.elapsed); }
+    else if (p.status === 'running') { cls += ' running'; icon = '\u25B6'; }
+    else if (p.status === 'skipped') { cls += ' skipped'; icon = '\u2014'; timeStr = 'skipped'; }
+    else if (p.status === 'error') { cls += ' error'; icon = '\u2717'; }
+  }
+  const label = labelTransform ? labelTransform(name) : name;
+  return `<div class="${cls}">
+    <div class="step-icon">${icon}</div>
+    <div class="step-label">${label}</div>
+    <div class="step-time">${timeStr}</div>
+  </div>`;
+}
+
+function renderGlobalStepper(globalPhases) {
+  return '<div class="stepper">' +
+    GLOBAL_PHASES.map((name, i) => stepHtml(name, i, globalPhases,
+      n => n.replace(' Agent', '').replace(' ', '<br>')
+    )).join('') +
+  '</div>';
+}
+
+function renderFunctionStepper(phases) {
+  return '<div class="stepper stepper-sm">' +
+    FUNCTION_PHASES.map((name, i) => stepHtml(name, i, phases,
+      n => n.replace(' Agent', '')
+    )).join('') +
+  '</div>';
+}
+
+function renderFunctionList(functions, jobId) {
+  const names = Object.keys(functions);
+  if (names.length === 0) return '';
+
+  return '<div class="function-list">' + names.map(fname => {
+    const func = functions[fname];
+    const st = func.status;
+    const phases = func.phases || {};
+
+    let downloadBtn = '';
+    if (st === 'done' && func.output_file) {
+      downloadBtn = `<a href="/download/${jobId}/${encodeURIComponent(fname)}" class="fn-download-btn">Download SQL</a>`;
     }
-    return `<div class="${cls}">
-      <div class="step-icon">${icon}</div>
-      <div class="step-label">${name.replace(' Agent', '').replace(' ', '<br>')}</div>
-      <div class="step-time">${timeStr}</div>
+
+    let errorMsg = '';
+    if (st === 'error' && func.error) {
+      errorMsg = `<div style="font-size:.75rem;color:#991b1b;margin-top:.25rem;">${func.error}</div>`;
+    }
+
+    return `<div class="function-card ${st}">
+      <div class="fn-header">
+        <span class="fn-name">${fname}</span>
+        <span class="fn-status-badge ${st}">${st}</span>
+        ${downloadBtn}
+      </div>
+      ${st !== 'pending' ? renderFunctionStepper(phases) : ''}
+      ${errorMsg}
     </div>`;
   }).join('') + '</div>';
 }
@@ -155,7 +232,7 @@ form.addEventListener('submit', async (e) => {
   clear_btn.disabled = true;
   statusDiv.className = 'running';
   statusDiv.style.display = 'block';
-  statusDiv.innerHTML = '<strong>Uploading and starting pipeline...</strong>' + renderStepper({});
+  statusDiv.innerHTML = '<strong>Uploading and starting pipeline...</strong>' + renderGlobalStepper({});
 
   const fd = new FormData(form);
   for (const name of ['force_parse', 'skip_logic', 'skip_review', 'skip_refine']) {
@@ -185,38 +262,62 @@ async function pollStatus(jobId) {
       const res = await fetch(`/status/${jobId}`);
       const data = await res.json();
 
+      const globalPhases = data.global_phases || {};
+      const functions = data.functions || {};
+
       if (data.status === 'running') {
-        const phases = data.phases || {};
-        const running = PHASES.find(p => phases[p]?.status === 'running');
-        const label = running ? `Running: ${running}` : 'Pipeline running...';
+        // Determine current activity label
+        let label = 'Pipeline running...';
+        const runningGlobal = GLOBAL_PHASES.find(p => globalPhases[p]?.status === 'running');
+        if (runningGlobal) {
+          label = `Running: ${runningGlobal}`;
+        } else {
+          const runningFunc = Object.keys(functions).find(f => functions[f].status === 'running');
+          if (runningFunc) {
+            const runningPhase = FUNCTION_PHASES.find(p => functions[runningFunc]?.phases[p]?.status === 'running');
+            label = `Processing: ${runningFunc}` + (runningPhase ? ` — ${runningPhase.replace(' Agent', '')}` : '');
+          }
+        }
+
         statusDiv.className = 'running';
-        statusDiv.innerHTML = `<strong>${label}</strong>` + renderStepper(phases);
+        statusDiv.innerHTML = `<strong>${label}</strong>`
+          + renderGlobalStepper(globalPhases)
+          + renderFunctionList(functions, jobId);
+
       } else if (data.status === 'done') {
         clearInterval(poll);
         const summary = data.summary;
+
         statusDiv.className = 'done';
         statusDiv.innerHTML = `
           <strong>Pipeline complete!</strong>
-          ${renderStepper(data.phases || {})}
+          ${renderGlobalStepper(globalPhases)}
+          ${renderFunctionList(functions, jobId)}
           <table class="summary-table">
             <tr><td>Functions parsed</td><td>${summary.total_functions}</td></tr>
             <tr><td>SQL files generated</td><td>${summary.files_generated}</td></tr>
             <tr><td>Reviews passed</td><td>${summary.reviews_passed}</td></tr>
             <tr><td>Reviews failed</td><td>${summary.reviews_failed}</td></tr>
           </table>
-          <p style="margin-top:.75rem"><a href="/download/${jobId}">Download output (.zip)</a></p>
-          <p style="margin-top:.75rem"><a href="/download/debug/${jobId}">Download debug (.zip)</a></p>`;
+          <div class="download-links">
+            <a href="/download/${jobId}">Download All (.zip)</a>
+            <a href="/download/debug/${jobId}" class="secondary">Download Debug (.zip)</a>
+          </div>`;
         run_btn.disabled = false;
         clear_btn.disabled = false;
+
       } else if (data.status === 'error') {
         clearInterval(poll);
         statusDiv.className = 'error';
-        statusDiv.innerHTML = `<strong>Pipeline failed</strong>${renderStepper(data.phases || {})}<pre class="error-detail">${data.error}</pre>`;
+        statusDiv.innerHTML = `<strong>Pipeline failed</strong>`
+          + renderGlobalStepper(globalPhases)
+          + renderFunctionList(functions, jobId)
+          + `<pre class="error-detail">${data.error}</pre>`;
         run_btn.disabled = false;
         clear_btn.disabled = false;
       }
     } catch { /* network blip, keep polling */ }
-  }, 10000);
+  }, 5000);
 }
 </script>
 </body>
