@@ -98,15 +98,15 @@ class ParserAgent:
         self.last_responses: dict[str, str] = {}
 
     @staticmethod
-    def _assign_codes(spec: FunctionSpec, start_code: int) -> FunctionSpec:
+    def _assign_codes(spec: FunctionSpec, vertical_code: str, start_code: int) -> FunctionSpec:
         """Assign sequential NCD/NED codes to controls starting from start_code."""
         for i, control in enumerate(spec.controls):
             code_num = start_code + i
-            control.code = f"NCD0{code_num:05d}"
-            control.error_code = f"NED0{code_num:05d}"
+            control.code = f"NC{vertical_code}0{code_num:05d}"
+            control.error_code = f"NE{vertical_code}0{code_num:05d}"
         return spec
 
-    def parse(self, raw_data: RawFunctionData, start_code: int) -> FunctionSpec:
+    def parse(self, raw_data: RawFunctionData, vertical_code: str, start_code: int) -> FunctionSpec:
         """Parse raw function data into a structured FunctionSpec."""
         control_rows = []
         for row in raw_data.rows:
@@ -138,13 +138,14 @@ class ParserAgent:
         spec = FunctionSpec(**data)
 
         # Assign sequential NCD/NED codes
-        spec = self._assign_codes(spec, start_code)
+        spec = self._assign_codes(spec, vertical_code, start_code)
 
         return spec
 
     def parse_all(
         self,
         raw_data_list: list[RawFunctionData],
+        vertical_code: str,
         start_code: int = 1,
     ) -> list[FunctionSpec]:
         """Parse all raw function data into FunctionSpec objects.
@@ -152,13 +153,15 @@ class ParserAgent:
         Each function gets its own sequential numbering starting from start_code.
         """
         specs = []
+        progress_code = start_code
         for raw_data in raw_data_list:
             try:
-                spec = self.parse(raw_data, start_code)
+                spec = self.parse(raw_data, vertical_code, progress_code)
                 specs.append(spec)
-                logger.debug("[Parser] Parsed: %s (%d params, %d controls, codes NCD0%05d-NCD0%05d)",
+                logger.debug("[Parser] Parsed: %s (%d params, %d controls, codes NC%05d-NC%05d)",
                              spec.function_name, len(spec.parameters), len(spec.controls),
-                             start_code, start_code + len(spec.controls) - 1)
+                             vertical_code, progress_code, progress_code + len(spec.controls) - 1)
+                progress_code += len(spec.controls)
             except Exception as e:
                 logger.error("[Parser] ERROR parsing %s: %s", raw_data.function_name, e)
                 logger.debug(traceback.format_exc())

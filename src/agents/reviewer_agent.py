@@ -44,7 +44,7 @@ Provide your review as a JSON object.
 
 
 class ReviewerAgent:
-    """Agent that reviews generated SQL files using LLM-based analysis."""
+    """Agent that reviews generated SQL using LLM-based analysis."""
 
     def __init__(self, llm: ChatOpenAI):
         self.llm = llm
@@ -55,11 +55,8 @@ class ReviewerAgent:
         self.chain = self.prompt | self.llm
         self.last_responses: dict[str, str] = {}
 
-    def review(self, spec: FunctionSpec, sql_path: str) -> ReviewResult:
-        """Review a generated SQL file against its specification."""
-        with open(sql_path, "r", encoding="utf-8") as f:
-            sql_content = f.read()
-
+    def review(self, spec: FunctionSpec, sql_content: str) -> ReviewResult:
+        """Review a generated SQL against its specification."""
         params_json = json.dumps(
             [p.model_dump() for p in spec.parameters], indent=2, ensure_ascii=False
         )
@@ -86,18 +83,13 @@ class ReviewerAgent:
         return ReviewResult(**data)
 
     def review_all(
-        self, specs: list[FunctionSpec], sql_paths: list[str]
+        self, specs: list[FunctionSpec], sql_map: dict[str, str]
     ) -> list[ReviewResult]:
-        """Review all generated SQL files."""
-        # Build a map of function_name -> spec
+        """Review all generated SQL contents."""
         spec_map = {s.function_name: s for s in specs}
 
         results = []
-        for path in sql_paths:
-            # Extract function name from filename
-            import os
-            fname = os.path.splitext(os.path.basename(path))[0]
-
+        for fname, sql_content in sql_map.items():
             if fname not in spec_map:
                 results.append(ReviewResult(
                     function_name=fname,
@@ -107,7 +99,7 @@ class ReviewerAgent:
                 continue
 
             try:
-                result = self.review(spec_map[fname], path)
+                result = self.review(spec_map[fname], sql_content)
                 results.append(result)
                 status_icon = "OK" if result.status == "PASS" else "!!"
                 logger.info("[Reviewer] %s %s: %s", status_icon, fname, result.status)

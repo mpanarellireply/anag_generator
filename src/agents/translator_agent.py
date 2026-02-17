@@ -1,5 +1,4 @@
 import logging
-import os
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -16,6 +15,7 @@ Rules:
 - Keep the -- prefix and the same indentation
 - Respond ONLY with the complete SQL file with translated comments
 - Do NOT wrap the output in markdown code blocks
+- Make all the comments uppercase
 """
 
 TRANSLATOR_USER_PROMPT = """Translate all SQL comments (lines starting with --) to Italian in this file:
@@ -36,35 +36,27 @@ class TranslatorAgent:
         self.chain = self.prompt | self.llm
         self.last_responses: dict[str, str] = {}
 
-    def translate(self, sql_path: str) -> str:
-        """Translate comments in a SQL file to Italian. Returns the path."""
-        with open(sql_path, "r", encoding="utf-8") as f:
-            sql_content = f.read()
-
+    def translate(self, sql_content: str, function_name: str = "") -> str:
+        """Translate comments in SQL content to Italian. Returns the translated SQL string."""
         response = self.chain.invoke({"sql_content": sql_content})
 
-        fname = os.path.splitext(os.path.basename(sql_path))[0]
-        self.last_responses[fname] = response.content
+        self.last_responses[function_name] = response.content
 
         translated = response.content.strip()
         if translated.startswith("```"):
             translated = translated.split("\n", 1)[1]
             translated = translated.rsplit("```", 1)[0]
 
-        with open(sql_path, "w", encoding="utf-8") as f:
-            f.write(translated)
+        return translated
 
-        return sql_path
-
-    def translate_all(self, sql_paths: list[str]) -> list[str]:
-        """Translate comments in all SQL files."""
-        translated = []
-        for path in sql_paths:
-            fname = os.path.splitext(os.path.basename(path))[0]
+    def translate_all(self, sql_map: dict[str, str]) -> dict[str, str]:
+        """Translate comments in all SQL contents. Returns updated {name: sql} dict."""
+        result = {}
+        for fname, sql_content in sql_map.items():
             try:
-                self.translate(path)
-                translated.append(path)
+                result[fname] = self.translate(sql_content, function_name=fname)
                 logger.debug("[Translator] Translated: %s", fname)
             except Exception as e:
                 logger.error("[Translator] ERROR translating %s: %s", fname, e)
-        return translated
+                result[fname] = sql_content  # keep original on error
+        return result

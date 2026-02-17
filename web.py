@@ -9,7 +9,7 @@ from zipfile import ZipFile
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from src.logging_config import setup_logging
 from src.orchestrator import Orchestrator
@@ -60,6 +60,7 @@ def _run_pipeline(job_id: str, excel_path: str, params: dict):
             excel_path,
             function_name=params.get("function") or None,
             force_parse=params.get("force_parse", False),
+            vertical_code=params.get("vertical_code", 1),
             start_code=params.get("start_code", 1),
             example_sql=example_sql_path,
             max_refine=params.get("max_refine", 3),
@@ -70,7 +71,7 @@ def _run_pipeline(job_id: str, excel_path: str, params: dict):
 
         jobs[job_id]["status"] = "done"
         jobs[job_id]["summary"] = summary
-        jobs[job_id]["output_dir"] = output_dir
+        jobs[job_id]["output_files"] = orchestrator.saved_files
         jobs[job_id]["debug_dir"] = debug_dir
 
     except Exception:
@@ -90,6 +91,7 @@ async def run_pipeline(
     model: str = Form("gpt-4o-mini"),
     function: str = Form(""),
     force_parse: bool = Form(False),
+    vertical_code: str = Form(""),
     start_code: int = Form(1),
     max_refine: int = Form(3),
     skip_logic: bool = Form(False),
@@ -120,6 +122,7 @@ async def run_pipeline(
         "model": model,
         "function": function.strip(),
         "force_parse": force_parse,
+        "vertical_code": vertical_code,
         "start_code": start_code,
         "max_refine": max_refine,
         "skip_logic": skip_logic,
@@ -128,7 +131,7 @@ async def run_pipeline(
         "example_sql_name": example_sql_name,
     }
 
-    jobs[job_id] = {"status": "running", "summary": None, "output_dir": None, "debug_dir": None, "error": None, "phases": {}}
+    jobs[job_id] = {"status": "running", "summary": None, "output_files": None, "debug_dir": None, "error": None, "phases": {}}
     thread = threading.Thread(target=_run_pipeline, args=(job_id, excel_path, params), daemon=True)
     thread.start()
 
@@ -148,7 +151,7 @@ async def job_status(job_id: str):
     }
 
 
-@app.get("/download/{job_id}")
+@app.get("/download/debug/{job_id}")
 async def download(job_id: str):
     job = jobs.get(job_id)
     if not job:
@@ -164,6 +167,32 @@ async def download(job_id: str):
             for f in debug_dir.rglob("*"):
                 if f.is_file():
                     zf.write(f, f"{f.relative_to(debug_dir)}")
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=output_{job_id}.zip"},
+    )
+
+@app.get("/download/{job_id}")
+async def download(job_id: str):
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job["status"] != "done":
+        raise HTTPException(status_code=400, detail="Job not finished yet")
+
+    final_files = job["output_files"]
+    print("-" * 80)
+    print(final_files)
+    print("-" * 80)
+
+    buf = BytesIO()
+    with ZipFile(buf, "w") as zf:
+        for f in final_files:
+            if os.path.exists(f):
+                zf.write(f)
     buf.seek(0)
 
     return StreamingResponse(

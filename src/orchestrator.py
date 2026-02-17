@@ -46,7 +46,7 @@ class Orchestrator:
             temperature=0,
         )
         self.parser_agent = ParserAgent(self.llm)
-        self.generator_agent = GeneratorAgent(template_dir, output_dir)
+        self.generator_agent = GeneratorAgent(template_dir)
         self.reviewer_agent = ReviewerAgent(self.llm)
         self.refiner_agent = RefinerAgent(self.llm)
         self.translator_agent = TranslatorAgent(self.llm)
@@ -97,11 +97,6 @@ class Orchestrator:
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
 
-    def _read_sql(self, sql_path: str) -> str:
-        """Read SQL file content for debug snapshots."""
-        with open(sql_path, "r", encoding="utf-8") as f:
-            return f.read()
-
     def _save_phase_debug(
         self,
         phase_prefix: str,
@@ -131,11 +126,24 @@ class Orchestrator:
         all_specs = list(cache_map.values())
         self._save_cache(all_specs)
 
+    def _save_sql_map(self, sql_map: dict[str, str]):
+        """Write all SQL contents to output files."""
+        logger.info("Saving SQL files to %s", self.output_dir)
+        logger.info("    contents: %s", sql_map)
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.saved_files = []
+        for fname, sql_content in sql_map.items():
+            output_path = os.path.join(self.output_dir, f"{fname}_{self._run_timestamp}.sql")
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write(sql_content)
+            self.saved_files.append(output_path)
+
     def run(
         self,
         excel_path: str,
         function_name: str | None = None,
         force_parse: bool = False,
+        vertical_code: str = "",
         start_code: int = 1,
         example_sql: str | None = None,
         max_refine: int = 3,
@@ -188,7 +196,7 @@ class Orchestrator:
             if to_parse:
                 logger.info("[Step 2] Parsing %d new functions with LLM (%d already cached)...",
                             len(to_parse), len(already_cached))
-                new_specs = self.parser_agent.parse_all(to_parse, start_code=start_code)
+                new_specs = self.parser_agent.parse_all(to_parse, vertical_code=vertical_code, start_code=start_code)
                 logger.info("Successfully parsed %d/%d functions", len(new_specs), len(to_parse))
                 self._merge_into_cache(new_specs)
                 specs = already_cached + new_specs
@@ -198,7 +206,7 @@ class Orchestrator:
                 specs = already_cached
         else:
             logger.info("[Step 2] Parsing %d functions with LLM...", len(raw_functions))
-            specs = self.parser_agent.parse_all(raw_functions, start_code=start_code)
+            specs = self.parser_agent.parse_all(raw_functions, vertical_code=vertical_code, start_code=start_code)
             logger.info("Successfully parsed %d/%d functions", len(specs), len(raw_functions))
             self._merge_into_cache(specs)
         timings["Parser Agent"] = time.time() - t0
@@ -213,12 +221,12 @@ class Orchestrator:
                 extra={"spec.json": json.dumps(spec.model_dump(), indent=2, ensure_ascii=False)},
             )
 
-        # Step 3: Generate SQL files
-        logger.info("[Step 3] Generating SQL files...")
+        # Step 3: Generate SQL content
+        logger.info("[Step 3] Generating SQL...")
         self._report_progress("Generator Agent", "running")
         t0 = time.time()
-        sql_paths = self.generator_agent.generate_all(specs)
-        logger.info("Generated %d SQL files in %s/", len(sql_paths), self.output_dir)
+        sql_map = self.generator_agent.generate_all(specs)
+        logger.info("Generated SQL for %d functions", len(sql_map))
         timings["Generator Agent"] = time.time() - t0
         self._report_progress("Generator Agent", "done", timings["Generator Agent"])
         logger.debug("Generator Agent time: %.2fs", timings["Generator Agent"])
@@ -229,16 +237,15 @@ class Orchestrator:
             self._report_progress("Logic Agent", "running")
             t0 = time.time()
             # Snapshot SQL before logic
-            sql_before_logic = {os.path.splitext(os.path.basename(p))[0]: self._read_sql(p) for p in sql_paths}
+            sql_before_logic = dict(sql_map)
             logic_agent = LogicAgent(self.llm, example_sql_path=example_sql)
-            logic_agent.complete_all(specs, sql_paths)
+            sql_map = logic_agent.complete_all(specs, sql_map)
             # Debug: save logic agent output
-            for p in sql_paths:
-                fname = os.path.splitext(os.path.basename(p))[0]
+            for fname in sql_map:
                 self._save_phase_debug(
                     "02_logic", fname, logic_agent.last_responses,
                     before_sql=sql_before_logic.get(fname),
-                    after_sql=self._read_sql(p),
+                    after_sql=sql_map.get(fname),
                 )
             timings["Logic Agent"] = time.time() - t0
             self._report_progress("Logic Agent", "done", timings["Logic Agent"])
@@ -247,13 +254,13 @@ class Orchestrator:
             logger.info("[Step 4] Skipping LogicAgent (--skip-logic)")
             self._report_progress("Logic Agent", "skipped")
 
-        # Step 5: Review generated files
+        # Step 5: Review generated SQL
         reviews = []
         if not skip_review:
-            logger.info("[Step 5] Reviewing generated SQL files...")
+            logger.info("[Step 5] Reviewing generated SQL...")
             self._report_progress("Reviewer Agent", "running")
             t0 = time.time()
-            reviews = self.reviewer_agent.review_all(specs, sql_paths)
+            reviews = self.reviewer_agent.review_all(specs, sql_map)
             # Debug: save reviewer output
             for r in reviews:
                 self._save_phase_debug(
@@ -283,27 +290,26 @@ class Orchestrator:
                     logger.info("[Step 6] Refine iteration %d/%d (%d failed files)...",
                                 iteration + 1, max_refine, len(failed))
                     # Snapshot SQL before refine
-                    path_map = {os.path.splitext(os.path.basename(p))[0]: p for p in sql_paths}
-                    sql_before_refine = {
-                        fname: self._read_sql(path_map[fname])
-                        for fname in [r.function_name for r in failed]
-                        if fname in path_map
-                    }
-                    refined_paths = self.refiner_agent.refine_all(specs, sql_paths, failed)
+                    sql_before_refine = {r.function_name: sql_map[r.function_name]
+                                         for r in failed if r.function_name in sql_map}
+                    refined = self.refiner_agent.refine_all(specs, sql_map, failed)
                     # Debug: save refiner output per iteration
-                    for p in refined_paths:
-                        fname = os.path.splitext(os.path.basename(p))[0]
+                    for fname, refined_sql in refined.items():
                         self._save_phase_debug(
                             f"04_refiner_iter{iteration + 1}", fname,
                             self.refiner_agent.last_responses,
                             before_sql=sql_before_refine.get(fname),
-                            after_sql=self._read_sql(p),
+                            after_sql=refined_sql,
                         )
-                    if not refined_paths:
+                    if not refined:
                         logger.info("No files were refined, stopping.")
                         break
-                    logger.info("Re-reviewing %d refined files...", len(refined_paths))
-                    re_reviews = self.reviewer_agent.review_all(specs, refined_paths)
+                    # Update sql_map with refined content
+                    sql_map.update(refined)
+                    # Re-review only the refined functions
+                    refined_sql_map = {fname: sql_map[fname] for fname in refined}
+                    logger.info("Re-reviewing %d refined files...", len(refined))
+                    re_reviews = self.reviewer_agent.review_all(specs, refined_sql_map)
                     # Debug: save re-review output
                     for r in re_reviews:
                         self._save_phase_debug(
@@ -316,19 +322,19 @@ class Orchestrator:
                 reviews = list(review_map.values())
             else:
                 # Refine without reviewer feedback (standalone mode)
-                logger.info("[Step 6] Refining SQL files without reviewer feedback...")
-                path_map = {os.path.splitext(os.path.basename(p))[0]: p for p in sql_paths}
-                sql_before_refine = {fname: self._read_sql(p) for fname, p in path_map.items()}
-                refined_paths = self.refiner_agent.refine_all_standalone(specs, sql_paths)
+                logger.info("[Step 6] Refining SQL without reviewer feedback...")
+                sql_before_refine = dict(sql_map)
+                refined = self.refiner_agent.refine_all_standalone(specs, sql_map)
                 # Debug: save standalone refiner output
-                for p in refined_paths:
-                    fname = os.path.splitext(os.path.basename(p))[0]
+                for fname, refined_sql in refined.items():
                     self._save_phase_debug(
                         "04_refiner_standalone", fname,
                         self.refiner_agent.last_responses,
                         before_sql=sql_before_refine.get(fname),
-                        after_sql=self._read_sql(p),
+                        after_sql=refined_sql,
                     )
+                # Update sql_map with refined content
+                sql_map.update(refined)
 
             timings["Refiner Agent"] = time.time() - t0
             self._report_progress("Refiner Agent", "done", timings["Refiner Agent"])
@@ -342,32 +348,31 @@ class Orchestrator:
         self._report_progress("Translator Agent", "running")
         t0 = time.time()
         # Snapshot SQL before translation
-        sql_before_translate = {
-            os.path.splitext(os.path.basename(p))[0]: self._read_sql(p) for p in sql_paths
-        }
-        self.translator_agent.translate_all(sql_paths)
+        sql_before_translate = dict(sql_map)
+        sql_map = self.translator_agent.translate_all(sql_map)
         # Debug: save translator output
-        for p in sql_paths:
-            fname = os.path.splitext(os.path.basename(p))[0]
+        for fname in sql_map:
             self._save_phase_debug(
                 "05_translator", fname,
                 self.translator_agent.last_responses,
                 before_sql=sql_before_translate.get(fname),
-                after_sql=self._read_sql(p),
+                after_sql=sql_map.get(fname),
             )
         timings["Translator Agent"] = time.time() - t0
         self._report_progress("Translator Agent", "done", timings["Translator Agent"])
         logger.debug("Translator Agent time: %.2fs", timings["Translator Agent"])
 
+        # Save final SQL files to output directory
+        self._save_sql_map(sql_map)
+
         # Debug: save final output
-        for p in sql_paths:
-            fname = os.path.splitext(os.path.basename(p))[0]
-            self._save_debug(fname, "06_final_output.sql", self._read_sql(p))
+        for fname, sql_content in sql_map.items():
+            self._save_debug(fname, f"{fname}_{self._run_timestamp}.sql", sql_content)
 
         timings["Total"] = time.time() - pipeline_start
 
         # Build summary
-        summary = self._build_summary(specs, sql_paths, reviews, timings)
+        summary = self._build_summary(specs, sql_map, reviews, timings)
         self._print_summary(summary)
 
         return summary
@@ -375,7 +380,7 @@ class Orchestrator:
     def _build_summary(
         self,
         specs: list[FunctionSpec],
-        sql_paths: list[str],
+        sql_map: dict[str, str],
         reviews: list[ReviewResult],
         timings: dict[str, float] | None = None,
     ) -> dict:
@@ -384,7 +389,7 @@ class Orchestrator:
 
         return {
             "total_functions": len(specs),
-            "files_generated": len(sql_paths),
+            "files_generated": len(sql_map),
             "reviews_passed": passed,
             "reviews_failed": failed,
             "reviews": [r.model_dump() for r in reviews],

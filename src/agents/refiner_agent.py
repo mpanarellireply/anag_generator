@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -107,8 +106,8 @@ class RefinerAgent:
         )
         return {"parameters_json": params_json, "controls_json": controls_json}
 
-    def _write_corrected(self, sql_path: str, response_content: str, function_name: str) -> str:
-        """Process LLM response and write corrected SQL to file."""
+    def _clean_response(self, response_content: str, function_name: str) -> str:
+        """Process LLM response and return cleaned SQL string."""
         self.last_responses[function_name] = response_content
 
         corrected = response_content.strip()
@@ -117,16 +116,10 @@ class RefinerAgent:
             corrected = corrected.split("\n", 1)[1]
             corrected = corrected.rsplit("```", 1)[0]
 
-        with open(sql_path, "w", encoding="utf-8") as f:
-            f.write(corrected)
+        return corrected
 
-        return sql_path
-
-    def refine(self, spec: FunctionSpec, sql_path: str, review: ReviewResult) -> str:
-        """Refine a SQL file based on reviewer feedback. Returns the path to the refined file."""
-        with open(sql_path, "r", encoding="utf-8") as f:
-            sql_content = f.read()
-
+    def refine(self, spec: FunctionSpec, sql_content: str, review: ReviewResult) -> str:
+        """Refine SQL content based on reviewer feedback. Returns the corrected SQL string."""
         context = self._build_spec_context(spec)
         issues_text = "\n".join(f"- {issue}" for issue in review.issues)
 
@@ -137,13 +130,10 @@ class RefinerAgent:
             "sql_content": sql_content,
         })
 
-        return self._write_corrected(sql_path, response.content, spec.function_name)
+        return self._clean_response(response.content, spec.function_name)
 
-    def refine_standalone(self, spec: FunctionSpec, sql_path: str) -> str:
-        """Refine a SQL file without reviewer feedback. Returns the path to the refined file."""
-        with open(sql_path, "r", encoding="utf-8") as f:
-            sql_content = f.read()
-
+    def refine_standalone(self, spec: FunctionSpec, sql_content: str) -> str:
+        """Refine SQL content without reviewer feedback. Returns the corrected SQL string."""
         context = self._build_spec_context(spec)
 
         response = self.standalone_chain.invoke({
@@ -152,53 +142,49 @@ class RefinerAgent:
             "sql_content": sql_content,
         })
 
-        return self._write_corrected(sql_path, response.content, spec.function_name)
+        return self._clean_response(response.content, spec.function_name)
 
     def refine_all(
         self,
         specs: list[FunctionSpec],
-        sql_paths: list[str],
+        sql_map: dict[str, str],
         reviews: list[ReviewResult],
-    ) -> list[str]:
-        """Refine all SQL files that failed review. Returns paths of refined files."""
+    ) -> dict[str, str]:
+        """Refine all SQL contents that failed review. Returns dict of refined {name: sql}."""
         spec_map = {s.function_name: s for s in specs}
-        path_map = {os.path.splitext(os.path.basename(p))[0]: p for p in sql_paths}
 
-        refined_paths = []
+        refined = {}
         for review in reviews:
             if review.status != "FAIL":
                 continue
             fname = review.function_name
-            if fname not in spec_map or fname not in path_map:
+            if fname not in spec_map or fname not in sql_map:
                 continue
 
             try:
-                path = self.refine(spec_map[fname], path_map[fname], review)
-                refined_paths.append(path)
+                refined[fname] = self.refine(spec_map[fname], sql_map[fname], review)
                 logger.debug("[Refiner] Refined: %s", fname)
             except Exception as e:
                 logger.error("[Refiner] ERROR refining %s: %s", fname, e)
 
-        return refined_paths
+        return refined
 
     def refine_all_standalone(
         self,
         specs: list[FunctionSpec],
-        sql_paths: list[str],
-    ) -> list[str]:
-        """Refine all SQL files without reviewer feedback. Returns paths of refined files."""
+        sql_map: dict[str, str],
+    ) -> dict[str, str]:
+        """Refine all SQL contents without reviewer feedback. Returns dict of refined {name: sql}."""
         spec_map = {s.function_name: s for s in specs}
-        path_map = {os.path.splitext(os.path.basename(p))[0]: p for p in sql_paths}
 
-        refined_paths = []
-        for fname, path in path_map.items():
+        refined = {}
+        for fname, sql_content in sql_map.items():
             if fname not in spec_map:
                 continue
             try:
-                refined_path = self.refine_standalone(spec_map[fname], path)
-                refined_paths.append(refined_path)
+                refined[fname] = self.refine_standalone(spec_map[fname], sql_content)
                 logger.debug("[Refiner] Refined (standalone): %s", fname)
             except Exception as e:
                 logger.error("[Refiner] ERROR refining %s: %s", fname, e)
 
-        return refined_paths
+        return refined

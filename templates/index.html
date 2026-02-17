@@ -69,6 +69,11 @@
 
   <div class="row">
     <div>
+      <label>Vertical code
+        <input type="text" name="vertical_code" value="D">
+      </label>
+    </div>
+    <div>
       <label>Start code
         <input type="number" name="start_code" value="1" min="1">
       </label>
@@ -188,18 +193,19 @@ async function pollStatus(jobId) {
         statusDiv.innerHTML = `<strong>${label}</strong>` + renderStepper(phases);
       } else if (data.status === 'done') {
         clearInterval(poll);
-        const s = data.summary;
+        const summary = data.summary;
         statusDiv.className = 'done';
         statusDiv.innerHTML = `
           <strong>Pipeline complete!</strong>
           ${renderStepper(data.phases || {})}
           <table class="summary-table">
-            <tr><td>Functions parsed</td><td>${s.total_functions}</td></tr>
-            <tr><td>SQL files generated</td><td>${s.files_generated}</td></tr>
-            <tr><td>Reviews passed</td><td>${s.reviews_passed}</td></tr>
-            <tr><td>Reviews failed</td><td>${s.reviews_failed}</td></tr>
+            <tr><td>Functions parsed</td><td>${summary.total_functions}</td></tr>
+            <tr><td>SQL files generated</td><td>${summary.files_generated}</td></tr>
+            <tr><td>Reviews passed</td><td>${summary.reviews_passed}</td></tr>
+            <tr><td>Reviews failed</td><td>${summary.reviews_failed}</td></tr>
           </table>
-          <p style="margin-top:.75rem"><a href="/download/${jobId}">Download output (.zip)</a></p>`;
+          <p style="margin-top:.75rem"><a href="/download/${jobId}">Download output (.zip)</a></p>
+          <p style="margin-top:.75rem"><a href="/download/debug/${jobId}">Download debug (.zip)</a></p>`;
         run_btn.disabled = false;
         clear_btn.disabled = false;
       } else if (data.status === 'error') {

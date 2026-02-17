@@ -93,14 +93,11 @@ class LogicAgent:
         ])
         return prompt | self.llm
 
-    def complete(self, spec: FunctionSpec, sql_path: str) -> str:
-        """Replace TODO placeholders in a SQL file with actual logic. Returns the path."""
-        with open(sql_path, "r", encoding="utf-8") as f:
-            sql_content = f.read()
-
+    def complete(self, spec: FunctionSpec, sql_content: str) -> str:
+        """Replace TODO placeholders in SQL content with actual logic. Returns the completed SQL string."""
         # Skip if no TODOs remain
         if "TODO" not in sql_content:
-            return sql_path
+            return sql_content
 
         params_json = json.dumps(
             [p.model_dump() for p in spec.parameters], indent=2, ensure_ascii=False
@@ -128,25 +125,20 @@ class LogicAgent:
             completed = completed.split("\n", 1)[1]
             completed = completed.rsplit("```", 1)[0]
 
-        with open(sql_path, "w", encoding="utf-8") as f:
-            f.write(completed)
+        return completed
 
-        return sql_path
+    def complete_all(self, specs: list[FunctionSpec], sql_map: dict[str, str]) -> dict[str, str]:
+        """Complete TODO logic in all SQL contents. Returns updated sql_map."""
+        result = dict(sql_map)
 
-    def complete_all(self, specs: list[FunctionSpec], sql_paths: list[str]) -> list[str]:
-        """Complete TODO logic in all generated SQL files."""
-        spec_map = {s.function_name: s for s in specs}
-        completed_paths = []
-
-        for path in sql_paths:
-            fname = os.path.splitext(os.path.basename(path))[0]
-            if fname not in spec_map:
+        for fname, sql_content in sql_map.items():
+            spec = next((s for s in specs if s.function_name == fname), None)
+            if spec is None:
                 continue
             try:
-                self.complete(spec_map[fname], path)
-                completed_paths.append(path)
+                result[fname] = self.complete(spec, sql_content)
                 logger.debug("[Logic] Completed: %s", fname)
             except Exception as e:
                 logger.error("[Logic] ERROR completing %s: %s", fname, e)
 
-        return completed_paths
+        return result

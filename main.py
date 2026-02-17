@@ -122,6 +122,7 @@ def main():
         args.excel_path,
         function_name=args.function,
         force_parse=args.force_parse,
+        vertical_code=args.vertical_code,
         start_code=args.start_code,
         example_sql=args.example_sql,
         max_refine=args.max_refine,
