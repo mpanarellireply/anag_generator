@@ -158,9 +158,9 @@ class ParserAgent:
             try:
                 spec = self.parse(raw_data, vertical_code, progress_code)
                 specs.append(spec)
-                logger.debug("[Parser] Parsed: %s (%d params, %d controls, codes NC%05d-NC%05d)",
+                logger.debug("[Parser] Parsed: %s (%d params, %d controls, codes NC%s%05d-NC%s%05d)",
                              spec.function_name, len(spec.parameters), len(spec.controls),
-                             vertical_code, progress_code, progress_code + len(spec.controls) - 1)
+                             vertical_code, progress_code, vertical_code, progress_code + len(spec.controls) - 1)
                 progress_code += len(spec.controls)
             except Exception as e:
                 logger.error("[Parser] ERROR parsing %s: %s", raw_data.function_name, e)
