@@ -7,6 +7,11 @@ from src.models import FunctionSpec, ReviewResult
 
 logger = logging.getLogger(__name__)
 
+STANDARD_RULES = """Follow also these standard rules:
+- Input function parameters follow the pattern V_{{variable_name}}
+- Do not use any DEFAULT for input function parameters
+"""
+
 REFINER_SYSTEM_PROMPT = """You are an expert PL/SQL developer. Your job is to fix structural and parsing errors
 in generated SQL validation functions based on reviewer feedback.
 
@@ -23,6 +28,8 @@ Common fixes include:
 - Mismatched function names in CREATE, END, DELETE, INSERT statements
 - Missing or incorrect DELETE/INSERT statements at the bottom
 - Incorrect V_CERR / V_XERR / V_FLG_ATTIVO pattern in control blocks
+
+{standard_rules}
 
 Respond ONLY with the corrected SQL content. Do NOT wrap it in markdown code blocks.
 Do NOT add any explanation before or after the SQL.
@@ -45,6 +52,8 @@ Carefully check the SQL for common issues and fix any you find:
 - Syntax errors or malformed PL/SQL constructs
 
 If the SQL is already correct, return it unchanged.
+
+{standard_rules}
 
 Respond ONLY with the corrected SQL content. Do NOT wrap it in markdown code blocks.
 Do NOT add any explanation before or after the SQL.
@@ -82,11 +91,11 @@ class RefinerAgent:
     def __init__(self, llm: ChatOpenAI):
         self.llm = llm
         self.prompt = ChatPromptTemplate.from_messages([
-            ("system", REFINER_SYSTEM_PROMPT),
+            ("system", REFINER_SYSTEM_PROMPT.format(standard_rules=STANDARD_RULES)),
             ("human", REFINER_USER_PROMPT),
         ])
         self.standalone_prompt = ChatPromptTemplate.from_messages([
-            ("system", REFINER_STANDALONE_SYSTEM_PROMPT),
+            ("system", REFINER_STANDALONE_SYSTEM_PROMPT.format(standard_rules=STANDARD_RULES)),
             ("human", REFINER_STANDALONE_USER_PROMPT),
         ])
         self.chain = self.prompt | self.llm

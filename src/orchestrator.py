@@ -150,7 +150,7 @@ class Orchestrator:
     def _save_single_sql(self, function_name: str, sql_content: str) -> str:
         """Write a single SQL file to the output directory. Returns the output path."""
         os.makedirs(self.output_dir, exist_ok=True)
-        output_path = os.path.join(self.output_dir, f"{function_name}_{self._run_timestamp}.sql")
+        output_path = os.path.join(self.output_dir, f"{function_name}.sql")
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(sql_content)
         return output_path
