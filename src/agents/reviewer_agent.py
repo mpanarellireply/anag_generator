@@ -4,6 +4,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
 from src.models import FunctionSpec, ReviewResult
+from src.agents.convention import CONVENTION
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,8 @@ Your review should check:
 4. INSERTS: The DELETE and INSERT statements at the bottom match the controls in the function
 5. ERROR HANDLING: Each control properly uses V_CERR, V_XERR, V_FLG_ATTIVO pattern
 6. CONSISTENCY: Function name matches in CREATE, END, DELETE, and INSERT statements
+
+{convention}
 
 Respond ONLY with a valid JSON object:
 {{
@@ -49,7 +52,7 @@ class ReviewerAgent:
     def __init__(self, llm: ChatOpenAI):
         self.llm = llm
         self.prompt = ChatPromptTemplate.from_messages([
-            ("system", REVIEWER_SYSTEM_PROMPT),
+            ("system", REVIEWER_SYSTEM_PROMPT.format(convention=CONVENTION)),
             ("human", REVIEWER_USER_PROMPT),
         ])
         self.chain = self.prompt | self.llm

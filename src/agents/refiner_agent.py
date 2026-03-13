@@ -4,6 +4,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
 from src.models import FunctionSpec, ReviewResult
+from src.agents.convention import CONVENTION
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ Common fixes include:
 - Missing or incorrect DELETE/INSERT statements at the bottom
 - Incorrect V_CERR / V_XERR / V_FLG_ATTIVO pattern in control blocks
 
-{standard_rules}
+{convention}
 
 Respond ONLY with the corrected SQL content. Do NOT wrap it in markdown code blocks.
 Do NOT add any explanation before or after the SQL.
@@ -53,7 +54,7 @@ Carefully check the SQL for common issues and fix any you find:
 
 If the SQL is already correct, return it unchanged.
 
-{standard_rules}
+{convention}
 
 Respond ONLY with the corrected SQL content. Do NOT wrap it in markdown code blocks.
 Do NOT add any explanation before or after the SQL.
@@ -91,11 +92,11 @@ class RefinerAgent:
     def __init__(self, llm: ChatOpenAI):
         self.llm = llm
         self.prompt = ChatPromptTemplate.from_messages([
-            ("system", REFINER_SYSTEM_PROMPT.format(standard_rules=STANDARD_RULES)),
+            ("system", REFINER_SYSTEM_PROMPT.format(convention=CONVENTION)),
             ("human", REFINER_USER_PROMPT),
         ])
         self.standalone_prompt = ChatPromptTemplate.from_messages([
-            ("system", REFINER_STANDALONE_SYSTEM_PROMPT.format(standard_rules=STANDARD_RULES)),
+            ("system", REFINER_STANDALONE_SYSTEM_PROMPT.format(convention=CONVENTION)),
             ("human", REFINER_STANDALONE_USER_PROMPT),
         ])
         self.chain = self.prompt | self.llm

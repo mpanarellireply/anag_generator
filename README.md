@@ -64,7 +64,9 @@ Parsed specs are cached in `parser_cache/parsed_specs.json` after the first run.
 
 ```bash
 # Build the image (use --platform linux/arm64 if the target server is ARM-based)
-docker build --platform linux/arm64 -t anag-generator .
+# docker build --platform linux/arm64 -t anag-generator .
+docker buildx create --use --name mybuilder    # only first time
+docker buildx build --platform linux/arm64 -t anag-generator --no-cache --load .
 
 # Save the image as a tar file
 docker save -o anag-generator.tar anag-generator
