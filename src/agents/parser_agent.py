@@ -102,7 +102,7 @@ class ParserAgent:
         """Assign sequential NCD/NED codes to controls starting from start_code."""
         for i, control in enumerate(spec.controls):
             code_num = start_code + i
-            control.code = f"NC{vertical_code}0{code_num:05d}"
+            control.code = f"NC{vertical_code}{code_num:05d}"
             control.error_code = f"NE{vertical_code}0{code_num:05d}"
         return spec
 
