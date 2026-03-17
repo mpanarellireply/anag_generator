@@ -173,11 +173,13 @@ class Orchestrator:
         timings: dict[str, float] = {}
         sql: str | None = None
         review: ReviewResult | None = None
+        step_success = True
 
         # --- Generator ---
         self._report_progress("Generator Agent", "running", function_name=fname)
         t0 = time.time()
         try:
+            logger.info("[Generator] Generating SQL for function: %s", fname)
             sql = self.generator_agent.generate(spec)
         except Exception as e:
             logger.error("[Generator] FATAL for %s: %s", fname, e)
@@ -192,6 +194,7 @@ class Orchestrator:
             self._report_progress("Logic Agent", "running", function_name=fname)
             t0 = time.time()
             try:
+                logger.info("[Logic] Completing SQL for function: %s", fname)
                 sql_before = sql
                 sql = logic_agent.complete(spec, sql)
                 self._save_phase_debug(
@@ -200,8 +203,11 @@ class Orchestrator:
                 )
             except Exception as e:
                 logger.error("[Logic] ERROR for %s: %s -- continuing with template SQL", fname, e)
-            timings["Logic Agent"] = time.time() - t0
-            self._report_progress("Logic Agent", "done", timings["Logic Agent"], function_name=fname)
+                step_success = False
+            finally:
+                timings["Logic Agent"] = time.time() - t0
+                self._report_progress("Logic Agent", "done" if step_success else "error", timings["Logic Agent"], function_name=fname)
+                step_success = True
         else:
             self._report_progress("Logic Agent", "skipped", function_name=fname)
 
@@ -210,6 +216,7 @@ class Orchestrator:
             self._report_progress("Reviewer Agent", "running", function_name=fname)
             t0 = time.time()
             try:
+                logger.info("[Reviewer] Reviewing SQL for function: %s", fname)
                 review = self.reviewer_agent.review(spec, sql)
                 self._save_phase_debug(
                     "03_reviewer", fname, self.reviewer_agent.last_responses,
@@ -217,8 +224,11 @@ class Orchestrator:
                 )
             except Exception as e:
                 logger.error("[Reviewer] ERROR for %s: %s", fname, e)
-            timings["Reviewer Agent"] = time.time() - t0
-            self._report_progress("Reviewer Agent", "done", timings["Reviewer Agent"], function_name=fname)
+                step_success = False
+            finally:
+                timings["Reviewer Agent"] = time.time() - t0
+                self._report_progress("Reviewer Agent", "done" if step_success else "error", timings["Reviewer Agent"], function_name=fname)
+                step_success = True
         else:
             self._report_progress("Reviewer Agent", "skipped", function_name=fname)
 
@@ -231,8 +241,10 @@ class Orchestrator:
                 # Iterative refine with reviewer feedback
                 for iteration in range(max_refine):
                     if review.status != "FAIL":
+                        step_success = True
                         break
                     try:
+                        logger.info("[Refiner] Refining SQL for function: %s, iteration: %d", fname, iteration + 1)
                         sql_before = sql
                         sql = self.refiner_agent.refine(spec, sql, review)
                         self._save_phase_debug(
@@ -249,10 +261,12 @@ class Orchestrator:
                         )
                     except Exception as e:
                         logger.error("[Refiner] ERROR iter %d for %s: %s", iteration + 1, fname, e)
+                        step_success = False
                         break
             elif not review and not skip_review:
                 # Standalone refine (reviewer failed, no review available)
                 try:
+                    logger.info("[Refiner] Refining SQL for function: %s (standalone)", fname)
                     sql_before = sql
                     sql = self.refiner_agent.refine_standalone(spec, sql)
                     self._save_phase_debug(
@@ -262,17 +276,20 @@ class Orchestrator:
                     )
                 except Exception as e:
                     logger.error("[Refiner] ERROR standalone for %s: %s", fname, e)
+                    step_success = False
             # else: review.status == "PASS" or skip_review -> nothing to refine
 
             timings["Refiner Agent"] = time.time() - t0
-            self._report_progress("Refiner Agent", "done", timings["Refiner Agent"], function_name=fname)
+            self._report_progress("Refiner Agent", "done" if step_success else "error", timings["Refiner Agent"], function_name=fname)
         else:
             self._report_progress("Refiner Agent", "skipped", function_name=fname)
 
+        step_success = True
         # --- Translator ---
         self._report_progress("Translator Agent", "running", function_name=fname)
         t0 = time.time()
         try:
+            logger.info("[Translator] Translating SQL for function: %s", fname)
             sql_before = sql
             sql = self.translator_agent.translate(sql, function_name=fname)
             self._save_phase_debug(
@@ -281,8 +298,11 @@ class Orchestrator:
             )
         except Exception as e:
             logger.error("[Translator] ERROR for %s: %s -- using untranslated SQL", fname, e)
-        timings["Translator Agent"] = time.time() - t0
-        self._report_progress("Translator Agent", "done", timings["Translator Agent"], function_name=fname)
+            step_success = False
+        finally:
+            timings["Translator Agent"] = time.time() - t0
+            self._report_progress("Translator Agent", "done" if step_success else "error", timings["Translator Agent"], function_name=fname)
+            step_success = True
 
         return sql, review, timings
 

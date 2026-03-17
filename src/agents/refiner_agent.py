@@ -92,11 +92,11 @@ class RefinerAgent:
     def __init__(self, llm: ChatOpenAI):
         self.llm = llm
         self.prompt = ChatPromptTemplate.from_messages([
-            ("system", REFINER_SYSTEM_PROMPT.format(convention=CONVENTION)),
+            ("system", REFINER_SYSTEM_PROMPT.replace("{convention}", CONVENTION)),
             ("human", REFINER_USER_PROMPT),
         ])
         self.standalone_prompt = ChatPromptTemplate.from_messages([
-            ("system", REFINER_STANDALONE_SYSTEM_PROMPT.format(convention=CONVENTION)),
+            ("system", REFINER_STANDALONE_SYSTEM_PROMPT.replace("{convention}", CONVENTION)),
             ("human", REFINER_STANDALONE_USER_PROMPT),
         ])
         self.chain = self.prompt | self.llm

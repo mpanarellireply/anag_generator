@@ -52,7 +52,7 @@ class ReviewerAgent:
     def __init__(self, llm: ChatOpenAI):
         self.llm = llm
         self.prompt = ChatPromptTemplate.from_messages([
-            ("system", REVIEWER_SYSTEM_PROMPT.format(convention=CONVENTION)),
+            ("system", REVIEWER_SYSTEM_PROMPT.replace("{convention}", CONVENTION)),
             ("human", REVIEWER_USER_PROMPT),
         ])
         self.chain = self.prompt | self.llm

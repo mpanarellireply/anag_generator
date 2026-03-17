@@ -235,6 +235,34 @@ async def download_debug(job_id: str):
     )
 
 
+@app.get("/download/debug/by_name/{job_name}")
+async def download_debug_by_name(job_name: str):
+    """Download debug directory by job name from the filesystem jobs directory."""
+    jobs_dir = Path("./jobs")
+    debug_dir = jobs_dir / job_name
+
+    print(f"Looking for debug directory 1: {debug_dir}")
+    
+    if not debug_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Job '{job_name}' not found")
+    
+    if not debug_dir.is_dir():
+        raise HTTPException(status_code=400, detail=f"'{job_name}' is not a directory")
+
+    buf = BytesIO()
+    with ZipFile(buf, "w") as zf:
+        for f in debug_dir.rglob("*"):
+            if f.is_file():
+                zf.write(f, f.relative_to(debug_dir))
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=debug_{job_name}.zip"},
+    )
+
+
 @app.get("/download/{job_id}/{function_name}")
 async def download_function(job_id: str, function_name: str):
     job = jobs.get(job_id)

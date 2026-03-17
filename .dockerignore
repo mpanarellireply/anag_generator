@@ -5,6 +5,7 @@ debug/
 output/
 uploads/
 jobs/
+logs/
 parser_cache/
 *.xlsx
 .env
