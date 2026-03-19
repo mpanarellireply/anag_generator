@@ -81,6 +81,19 @@
 </head>
 <body>
 <h1>PL/SQL Generator</h1>
+<div style="background: #f8f9fa; border: 1px solid #e5e7eb; border-radius: 6px; padding: 1rem; margin-top: 1rem;">
+  <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; color: #374151;">Excel Input Fields</h3>
+  <p style="margin: 0 0 0.5rem 0; font-size: 0.85rem; color: #6b7280;">The following fields are considered from the input Excel file:</p>
+  <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+    <span style="background: #e5e7eb; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-family: monospace;">OPERATIVITA</span>
+    <span style="background: #e5e7eb; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-family: monospace;">FUNZIONE</span>
+    <span style="background: #e5e7eb; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-family: monospace;">PARAMETRI INPUT</span>
+    <span style="background: #e5e7eb; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-family: monospace;">CONTROLLO</span>
+    <span style="background: #e5e7eb; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-family: monospace;">BLOCCANTE/WARNING</span>
+    <span style="background: #e5e7eb; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-family: monospace;">MESSAGGIO DI ERRORE</span>
+    <span style="background: #e5e7eb; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-family: monospace;">CAMPO IMPATTATO</span>
+  </div>
+</div>
 <form id="pipelineForm">
   <label>Excel file *
     <input type="file" name="excel_file" accept=".xlsx,.xls" required>
