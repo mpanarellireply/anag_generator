@@ -110,7 +110,7 @@ class ReviewerAgent:
                     for issue in result.issues:
                         logger.info("[Reviewer]   - %s", issue)
             except Exception as e:
-                logger.error("[Reviewer] ERROR reviewing %s: %s", fname, e)
+                logger.error("[Reviewer] ERROR reviewing %s: %s", fname, e, exc_info=True)
                 results.append(ReviewResult(
                     function_name=fname,
                     status="FAIL",

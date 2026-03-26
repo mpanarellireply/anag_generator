@@ -57,6 +57,6 @@ class TranslatorAgent:
                 result[fname] = self.translate(sql_content, function_name=fname)
                 logger.debug("[Translator] Translated: %s", fname)
             except Exception as e:
-                logger.error("[Translator] ERROR translating %s: %s", fname, e)
+                logger.error("[Translator] ERROR translating %s: %s", fname, e, exc_info=True)
                 result[fname] = sql_content  # keep original on error
         return result

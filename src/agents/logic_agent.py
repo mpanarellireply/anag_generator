@@ -139,6 +139,6 @@ class LogicAgent:
                 result[fname] = self.complete(spec, sql_content)
                 logger.debug("[Logic] Completed: %s", fname)
             except Exception as e:
-                logger.error("[Logic] ERROR completing %s: %s", fname, e)
+                logger.error("[Logic] ERROR completing %s: %s", fname, e, exc_info=True)
 
         return result

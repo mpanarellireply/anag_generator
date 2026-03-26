@@ -103,7 +103,7 @@ class ParserAgent:
         for i, control in enumerate(spec.controls):
             code_num = start_code + i
             control.code = f"NC{vertical_code}{code_num:05d}"
-            control.error_code = f"NE{vertical_code}0{code_num:05d}"
+            control.error_code = f"NE{vertical_code}{code_num:05d}"
         return spec
 
     def parse(self, raw_data: RawFunctionData, vertical_code: str, start_code: int) -> FunctionSpec:
@@ -163,6 +163,6 @@ class ParserAgent:
                              vertical_code, progress_code, vertical_code, progress_code + len(spec.controls) - 1)
                 progress_code += len(spec.controls)
             except Exception as e:
-                logger.error("[Parser] ERROR parsing %s: %s", raw_data.function_name, e)
+                logger.error("[Parser] ERROR parsing %s: %s", raw_data.function_name, e, exc_info=True)
                 logger.debug(traceback.format_exc())
         return specs

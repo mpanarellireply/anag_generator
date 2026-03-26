@@ -35,5 +35,5 @@ class GeneratorAgent:
                 sql_map[spec.function_name] = sql_content
                 logger.debug("[Generator] Generated: %s", spec.function_name)
             except Exception as e:
-                logger.error("[Generator] ERROR generating %s: %s", spec.function_name, e)
+                logger.error("[Generator] ERROR generating %s: %s", spec.function_name, e, exc_info=True)
         return sql_map

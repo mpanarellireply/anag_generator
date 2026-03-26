@@ -175,7 +175,7 @@ class RefinerAgent:
                 refined[fname] = self.refine(spec_map[fname], sql_map[fname], review)
                 logger.debug("[Refiner] Refined: %s", fname)
             except Exception as e:
-                logger.error("[Refiner] ERROR refining %s: %s", fname, e)
+                logger.error("[Refiner] ERROR refining %s: %s", fname, e, exc_info=True)
 
         return refined
 
@@ -195,6 +195,6 @@ class RefinerAgent:
                 refined[fname] = self.refine_standalone(spec_map[fname], sql_content)
                 logger.debug("[Refiner] Refined (standalone): %s", fname)
             except Exception as e:
-                logger.error("[Refiner] ERROR refining %s: %s", fname, e)
+                logger.error("[Refiner] ERROR refining %s: %s", fname, e, exc_info=True)
 
         return refined

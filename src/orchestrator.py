@@ -182,7 +182,7 @@ class Orchestrator:
             logger.info("[Generator] Generating SQL for function: %s", fname)
             sql = self.generator_agent.generate(spec)
         except Exception as e:
-            logger.error("[Generator] FATAL for %s: %s", fname, e)
+            logger.error("[Generator] FATAL for %s: %s", fname, e, exc_info=True)
             timings["Generator Agent"] = time.time() - t0
             self._report_progress("Generator Agent", "error", timings["Generator Agent"], function_name=fname)
             return None, None, timings
@@ -202,7 +202,7 @@ class Orchestrator:
                     before_sql=sql_before, after_sql=sql,
                 )
             except Exception as e:
-                logger.error("[Logic] ERROR for %s: %s -- continuing with template SQL", fname, e)
+                logger.error("[Logic] ERROR for %s: %s -- continuing with template SQL", fname, e, exc_info=True)
                 step_success = False
             finally:
                 timings["Logic Agent"] = time.time() - t0
@@ -223,7 +223,7 @@ class Orchestrator:
                     extra={"result.json": json.dumps(review.model_dump(), indent=2, ensure_ascii=False)},
                 )
             except Exception as e:
-                logger.error("[Reviewer] ERROR for %s: %s", fname, e)
+                logger.error("[Reviewer] ERROR for %s: %s", fname, e, exc_info=True)
                 step_success = False
             finally:
                 timings["Reviewer Agent"] = time.time() - t0
@@ -253,6 +253,7 @@ class Orchestrator:
                             before_sql=sql_before, after_sql=sql,
                         )
                         # Re-review
+                        logger.info("[Refiner->Review] Re-reviewing SQL for function: %s, iteration: %d", fname, iteration + 1)
                         review = self.reviewer_agent.review(spec, sql)
                         self._save_phase_debug(
                             f"04_reviewer_iter{iteration + 1}", fname,
@@ -260,7 +261,7 @@ class Orchestrator:
                             extra={"result.json": json.dumps(review.model_dump(), indent=2, ensure_ascii=False)},
                         )
                     except Exception as e:
-                        logger.error("[Refiner] ERROR iter %d for %s: %s", iteration + 1, fname, e)
+                        logger.error("[Refiner] ERROR iter %d for %s: %s", iteration + 1, fname, e, exc_info=True)
                         step_success = False
                         break
             elif not review and not skip_review:
@@ -275,7 +276,7 @@ class Orchestrator:
                         before_sql=sql_before, after_sql=sql,
                     )
                 except Exception as e:
-                    logger.error("[Refiner] ERROR standalone for %s: %s", fname, e)
+                    logger.error("[Refiner] ERROR standalone for %s: %s", fname, e, exc_info=True)
                     step_success = False
             # else: review.status == "PASS" or skip_review -> nothing to refine
 
@@ -297,7 +298,7 @@ class Orchestrator:
                 before_sql=sql_before, after_sql=sql,
             )
         except Exception as e:
-            logger.error("[Translator] ERROR for %s: %s -- using untranslated SQL", fname, e)
+            logger.error("[Translator] ERROR for %s: %s -- using untranslated SQL", fname, e, exc_info=True)
             step_success = False
         finally:
             timings["Translator Agent"] = time.time() - t0
